@@ -107,6 +107,10 @@ class Application extends ParentApplication
         $commands[] = new Command\Certificate\CertificateDeleteCommand();
         $commands[] = new Command\Certificate\CertificateGetCommand();
         $commands[] = new Command\Certificate\CertificateListCommand();
+        $commands[] = new Command\Config\Drupal8Command();
+        $commands[] = new Command\Config\Drupal7Command();
+        $commands[] = new Command\Config\NodejsCommand();
+        $commands[] = new Command\Config\PhpCommand();
         $commands[] = new Command\Db\DbSqlCommand();
         $commands[] = new Command\Db\DbDumpCommand();
         $commands[] = new Command\Db\DbSizeCommand();

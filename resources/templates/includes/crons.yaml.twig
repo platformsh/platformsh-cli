@@ -1,0 +1,15 @@
+# Cron jobs allow you to run scheduled tasks at specified times or intervals.
+#
+# The minimum interval between cron runs is 5 minutes, even if specified as
+# less. Additionally, a variable delay is added to each cron job in each project
+# in order to prevent host overloading should every project try to run their
+# nightly tasks at the same time. Your crons will not run exactly at the time
+# that you specify, but will be delayed by 0-300 seconds.
+{% if crons %}
+{{ crons|yaml }}
+{% else %}
+#crons:
+#    example:
+#        spec: '*/20 * * * *'
+#        cmd: 'cd scripts; my-script.sh'
+{% endif %}

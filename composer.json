@@ -19,7 +19,8 @@
         "padraic/phar-updater": "^1.0",
         "symfony/dependency-injection": "^3.1",
         "symfony/config": "^3.1",
-        "paragonie/random_compat": "^2.0"
+        "paragonie/random_compat": "^2.0",
+        "twig/twig": "^1.33"
     },
     "suggest": {
         "drush/drush": "For Drupal projects"

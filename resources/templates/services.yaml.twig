@@ -1,0 +1,18 @@
+# The services.yaml file defines what other services will be part of your cluster,
+# such as a database or caching server. The keys are the name of the service, which
+# you will reference in the .platform.app.yaml relationships section. The type specifies the
+# service and its version. In some cases a disk key is also available and indicates
+# the size in megabytes to reserve for that service's storage. You may also have
+# more than one service of a given type, as long as they have unique names.
+#
+# See https://docs.platform.sh/user_guide/reference/services-yaml.html for more information.
+
+{% if services %}
+{{ services|yaml }}
+{% else %}
+# Example MySQL service
+#
+# mysqldb:
+#     type: mysql:5.5
+#     disk: 2048
+{% endif %}
