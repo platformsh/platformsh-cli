@@ -182,6 +182,9 @@ class Application extends ParentApplication
         $commands[] = new Command\Snapshot\SnapshotCreateCommand();
         $commands[] = new Command\Snapshot\SnapshotListCommand();
         $commands[] = new Command\Snapshot\SnapshotRestoreCommand();
+        $commands[] = new Command\Snapshot\SnapshotScheduleAddCommand();
+        $commands[] = new Command\Snapshot\SnapshotScheduleDeleteCommand();
+        $commands[] = new Command\Snapshot\SnapshotScheduleListCommand();
         $commands[] = new Command\SshKey\SshKeyAddCommand();
         $commands[] = new Command\SshKey\SshKeyDeleteCommand();
         $commands[] = new Command\SshKey\SshKeyListCommand();

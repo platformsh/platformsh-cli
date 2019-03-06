@@ -170,6 +170,9 @@ snapshot
   snapshot:create                           Make a snapshot of an environment
   snapshot:list (snapshots)                 List available snapshots of an environment
   snapshot:restore                          Restore an environment snapshot
+  snapshot:schedule:add                     Add a scheduled snapshot policy
+  snapshot:schedule:delete                  Delete a scheduled snapshot policy
+  snapshot:schedule:list                    List scheduled snapshot policies
 ssh-key
   ssh-key:add                               Add a new SSH key
   ssh-key:delete                            Delete an SSH key

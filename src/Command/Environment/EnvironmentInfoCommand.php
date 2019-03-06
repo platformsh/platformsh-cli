@@ -5,6 +5,7 @@ use Platformsh\Cli\Command\CommandBase;
 use Platformsh\Cli\Console\AdaptiveTableCell;
 use Platformsh\Cli\Service\Table;
 use Platformsh\Cli\Service\PropertyFormatter;
+use Platformsh\Cli\Util\NestedArrayUtil;
 use Platformsh\Client\Model\Environment;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
@@ -115,21 +116,30 @@ class EnvironmentInfoCommand extends CommandBase
             $value = false;
         }
         settype($value, $type);
-        $currentValue = $environment->getProperty($property, false);
+        $currentValue = $this->api()->getNestedProperty($environment, $property, false);
         if ($currentValue === $value) {
             $this->stdErr->writeln(sprintf(
                 'Property <info>%s</info> already set as: %s',
                 $property,
-                $this->formatter->format($environment->getProperty($property, false), $property)
+                $this->formatter->format($currentValue, $property)
             ));
 
             return 0;
         }
-        $result = $environment->update([$property => $value]);
+        if (strpos($property, '.') !== false) {
+            $parents = explode('.', $property);
+            $propertyName = array_shift($parents);
+            $parentValue = $environment->getProperty($propertyName, true, false);
+            NestedArrayUtil::setNestedArrayValue($parentValue, $parents, $value);
+            $patch = [$propertyName => $parentValue];
+        } else {
+            $patch = [$property => $value];
+        }
+        $result = $environment->update($patch);
         $this->stdErr->writeln(sprintf(
             'Property <info>%s</info> set to: %s',
             $property,
-            $this->formatter->format($environment->$property, $property)
+            $this->formatter->format($this->api()->getNestedProperty($environment, $property, false), $property)
         ));
 
         $this->api()->clearEnvironmentsCache($environment->project);
@@ -161,6 +171,7 @@ class EnvironmentInfoCommand extends CommandBase
             'parent' => 'string',
             'title' => 'string',
             'restrict_robots' => 'boolean',
+            'backups.manual_count' => 'int',
         ];
 
         return isset($writableProperties[$property]) ? $writableProperties[$property] : false;
