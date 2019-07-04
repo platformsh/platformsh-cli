@@ -32,10 +32,15 @@ class WelcomeCommand extends CommandBase
             $this->stdErr->writeln("Project title: <info>{$project->title}</info>");
             $this->stdErr->writeln("Project ID: <info>{$project->id}</info>");
             $this->stdErr->writeln("Project dashboard: <info>$projectUri</info>\n");
-
+            if (!$this->isConfigured())
+            {
+/*FIXME we probably want to be much less instrusive or at least ask yes/no  */
+            $this->stdErr->writeln('<comment>This project is missing required configuration files. We can create some initial ones for you</comment>'); 
+                $this->runOtherCommand('app:init');
+            }
             // Warn if the project is suspended.
             if ($project->isSuspended()) {
-                $messages = [];
+                $messages= [];
                 $messages[] = '<comment>This project is suspended.</comment>';
                 if ($project->owner === $this->api()->getMyAccount()['id']) {
                     $messages[] = '<comment>Update your payment details to re-activate it: '
@@ -58,5 +63,11 @@ class WelcomeCommand extends CommandBase
         $this->stdErr->writeln("Manage your SSH keys by running <info>$executable ssh-keys</info>\n");
 
         $this->stdErr->writeln("Type <info>$executable list</info> to see all available commands.");
+    }
+    /* FIXME This probably wants to live somewher else duplicating it for the moment in ProjetGetCommand.php */
+    private function isConfigured(){
+            $git = $this->getService('git');
+            $projectRoot = $git->getRoot(null, true);
+            return file_exists ($projectRoot.".platform/routes.yaml");
     }
 }

@@ -94,6 +94,15 @@ class ProjectGetCommand extends CommandBase
                 'Your project has been initialized and connected to <info>%s</info>!',
                 $this->config()->get('service.name')
             ));
+            
+            chdir($projectRoot);
+            if (!$this->isConfigured())
+            {
+            /* We probably want to be much less instrusive or at least ask yes/no  */
+            $this->stdErr->writeln('<comment>This project is missing required configuration files. We can create some initial ones for you</comment>'); 
+                $this->runOtherCommand('app:init');
+            }
+            
             $this->stdErr->writeln('');
             $this->stdErr->writeln(sprintf(
                 'Commit and push to the <info>master</info> branch of the <info>%s</info> Git remote'
@@ -186,8 +195,9 @@ class ProjectGetCommand extends CommandBase
                 $this->config()->get('application.executable')
             ));
         }
-
+            
         return $success ? 0 : 1;
+        
     }
 
     /**
@@ -281,5 +291,11 @@ class ProjectGetCommand extends CommandBase
                 $this->config()->get('application.executable')
             ));
         }
+    }
+    /* FIXME This probably wants to live somewher else. Duplicate at WelcomeCommand.php */
+    private function isConfigured(){
+            $git = $this->getService('git');
+            $projectRoot = $git->getRoot(null, true);
+            return file_exists ($projectRoot.".platform/routes.yaml");
     }
 }
