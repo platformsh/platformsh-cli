@@ -165,14 +165,11 @@ class Config
      *
      * @return array
      */
-    protected function loadConfigFromFile($filename)
+    public function loadConfigFromFile($filename)
     {
-        $contents = file_get_contents($filename);
-        if ($contents === false) {
-            throw new \RuntimeException('Failed to read config file: ' . $filename);
-        }
-
-        return (array) Yaml::parse($contents);
+        /* Should this call the service?? */
+        $fs = new Filesystem();
+        return $fs->readYamlFile($filename);
     }
 
     protected function applyEnvironmentOverrides()

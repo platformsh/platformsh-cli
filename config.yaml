@@ -52,6 +52,7 @@ local:
   project_config_legacy: '.platform-project'
   shared_dir: '.platform/local/shared'
   web_root: '_www'
+  fleet_config: '.platform/local/fleet.yaml'
 
   # This can be overridden by the {application.env_prefix}COPY_ON_WINDOWS env
   # var, or via the user config file.

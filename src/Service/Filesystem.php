@@ -5,6 +5,7 @@ namespace Platformsh\Cli\Service;
 use Platformsh\Cli\Util\OsUtil;
 use Symfony\Component\Filesystem\Exception\IOException;
 use Symfony\Component\Filesystem\Filesystem as SymfonyFilesystem;
+use Symfony\Component\Yaml\Yaml;
 
 class Filesystem
 {
@@ -491,5 +492,37 @@ class Filesystem
             }
         }
         throw new \RuntimeException("Tar command not found");
+    }
+
+    /**
+     * @param $filename
+     * @return bool
+     */
+    public function fileExists($filename) {
+        return $this->fs->exists($filename);
+    }
+
+    /**
+     * @param string $filename
+     *
+     * @return array
+     */
+    public function readYamlFile($filename)
+    {
+        $contents = file_get_contents($filename);
+        if ($contents === false) {
+            throw new \RuntimeException('Failed to read file: ' . $filename);
+        }
+
+        return (array) Yaml::parse($contents);
+    }
+
+    /**
+     * @param $filename
+     * @param array $contents
+     */
+    public function createYamlFile($filename, array $contents) {
+        $yaml = Yaml::dump($contents);
+        $this->fs->dumpFile($filename, $yaml);
     }
 }

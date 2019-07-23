@@ -44,6 +44,10 @@ services:
         class:     '\Platformsh\Cli\Service\Drush'
         arguments: ['@config', '@shell', '@local.project']
 
+    fleets:
+        class:     '\Platformsh\Cli\Service\Fleets'
+        arguments: ['@config', '@shell']
+
     fs:
         class:     '\Platformsh\Cli\Service\Filesystem'
         arguments: ['@shell']

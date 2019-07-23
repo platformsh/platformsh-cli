@@ -16,6 +16,7 @@ class LocalProject
     protected $git;
 
     protected static $projectConfigs = [];
+    protected static $fleetConfigs = [];
 
     public function __construct(Config $config = null, Git $git = null)
     {
