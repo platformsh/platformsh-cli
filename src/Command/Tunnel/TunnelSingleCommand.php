@@ -1,31 +1,60 @@
 <?php
 namespace Platformsh\Cli\Command\Tunnel;
 
-use GuzzleHttp\Url;
+use GuzzleHttp\Psr7\Uri;
+use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\QuestionHelper;
 use Platformsh\Cli\Service\Relationships;
+use Platformsh\Cli\Service\Selector;
 use Platformsh\Cli\Service\Ssh;
 use Platformsh\Cli\Console\ProcessManager;
+use Platformsh\Cli\Service\TunnelService;
 use Platformsh\Cli\Util\PortUtil;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
-class TunnelSingleCommand extends TunnelCommandBase
+class TunnelSingleCommand extends CommandBase
 {
+    protected static $defaultName = 'tunnel:single';
+
+    private $config;
+    private $questionHelper;
+    private $relationshipsService;
+    private $selector;
+    private $ssh;
+    private $tunnelService;
+
+    public function __construct(
+        Config $config,
+        QuestionHelper $questionHelper,
+        Relationships $relationshipsService,
+        Selector $selector,
+        Ssh $ssh,
+        TunnelService $tunnelService
+    ) {
+        $this->config = $config;
+        $this->questionHelper = $questionHelper;
+        $this->relationshipsService = $relationshipsService;
+        $this->selector = $selector;
+        $this->ssh = $ssh;
+        $this->tunnelService = $tunnelService;
+        parent::__construct();
+    }
+
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('tunnel:single')
-            ->setDescription('Open a single SSH tunnel to an app relationship')
+        $this->setDescription('Open a single SSH tunnel to an app relationship')
             ->addOption('port', null, InputOption::VALUE_REQUIRED, 'The local port');
-        $this->addProjectOption();
-        $this->addEnvironmentOption();
-        $this->addAppOption();
-        Relationships::configureInput($this->getDefinition());
-        Ssh::configureInput($this->getDefinition());
+
+        $definition = $this->getDefinition();
+        $this->selector->addAllOptions($definition);
+        $this->relationshipsService->configureInput($definition);
+        $this->ssh->configureInput($definition);
     }
 
     /**
@@ -33,31 +62,25 @@ class TunnelSingleCommand extends TunnelCommandBase
      */
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
-        $project = $this->getSelectedProject();
-        $environment = $this->getSelectedEnvironment();
+        $selection = $this->selector->getSelection($input);
+        $project = $selection->getProject();
+        $environment = $selection->getEnvironment();
+        $appName = $selection->getAppName();
 
-        $container = $this->selectRemoteContainer($input, false);
-        $appName = $container->getName();
-        $sshUrl = $container->getSshUrl();
-        $host = $this->selectHost($input, false, $container);
+        $sshUrl = $environment->getSshUrl($appName);
 
-        /** @var \Platformsh\Cli\Service\Relationships $relationshipsService */
-        $relationshipsService = $this->getService('relationships');
-        $relationships = $relationshipsService->getRelationships($host);
+        $relationships = $this->relationshipsService->getRelationships($selection->getHost());
         if (!$relationships) {
             $this->stdErr->writeln('No relationships found.');
             return 1;
         }
 
-        $service = $relationshipsService->chooseService($host, $input, $output);
+        $service = $this->relationshipsService->chooseService($selection->getHost(), $input, $output);
         if (!$service) {
             return 1;
         }
 
         if ($environment->id === 'master') {
-            /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-            $questionHelper = $this->getService('question_helper');
             $confirmText = sprintf(
                 'Are you sure you want to open an SSH tunnel to'
                 . ' the relationship <comment>%s</comment> on the'
@@ -65,15 +88,13 @@ class TunnelSingleCommand extends TunnelCommandBase
                 $service['_relationship_name'],
                 $environment->id
             );
-            if (!$questionHelper->confirm($confirmText, false)) {
+            if (!$this->questionHelper->confirm($confirmText, false)) {
                 return 1;
             }
             $this->stdErr->writeln('');
         }
 
-        /** @var \Platformsh\Cli\Service\Ssh $ssh */
-        $ssh = $this->getService('ssh');
-        $sshArgs = $ssh->getSshArgs();
+        $sshArgs = $this->ssh->getSshArgs();
 
         $remoteHost = $service['host'];
         $remotePort = $service['port'];
@@ -90,7 +111,7 @@ class TunnelSingleCommand extends TunnelCommandBase
                 return 1;
             }
         } else {
-            $localPort = $this->getPort();
+            $localPort = $this->tunnelService->getPort();
         }
 
         $tunnel = [
@@ -106,9 +127,9 @@ class TunnelSingleCommand extends TunnelCommandBase
             'pid' => null,
         ];
 
-        $relationshipString = $this->formatTunnelRelationship($tunnel);
+        $relationshipString = $this->tunnelService->formatTunnelRelationship($tunnel);
 
-        if ($openTunnelInfo = $this->isTunnelOpen($tunnel)) {
+        if ($openTunnelInfo = $this->tunnelService->isTunnelOpen($tunnel)) {
             $this->stdErr->writeln(sprintf(
                 'A tunnel is already open for the relationship <info>%s</info> (on port %s)',
                 $relationshipString,
@@ -118,10 +139,10 @@ class TunnelSingleCommand extends TunnelCommandBase
             return 1;
         }
 
-        $pidFile = $this->getPidFile($tunnel);
+        $pidFile = $this->tunnelService->getPidFile($tunnel);
 
         $processManager = new ProcessManager();
-        $process = $this->createTunnelProcess($sshUrl, $remoteHost, $remotePort, $localPort, $sshArgs);
+        $process = $this->tunnelService->createTunnelProcess($sshUrl, $remoteHost, $remotePort, $localPort, $sshArgs);
         $pid = $processManager->startProcess($process, $pidFile, $this->stdErr);
 
         // Wait a very small time to capture any immediate errors.
@@ -138,8 +159,7 @@ class TunnelSingleCommand extends TunnelCommandBase
         }
 
         $tunnel['pid'] = $pid;
-        $this->tunnelInfo[] = $tunnel;
-        $this->saveTunnelInfo();
+        $this->tunnelService->addTunnelInfo($tunnel);
 
         $this->stdErr->writeln('');
 
@@ -150,7 +170,7 @@ class TunnelSingleCommand extends TunnelCommandBase
         ));
 
         $localService = array_merge($service, array_intersect_key([
-            'host' => self::LOCAL_IP,
+            'host' => TunnelService::LOCAL_IP,
             'port' => $tunnel['localPort'],
         ], $service));
         $info = [
@@ -199,6 +219,6 @@ class TunnelSingleCommand extends TunnelCommandBase
             $urlParts[$newKey] = $value;
         }
 
-        return Url::buildUrl($urlParts);
+        return Uri::fromParts($urlParts);
     }
 }

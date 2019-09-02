@@ -1,10 +1,12 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Tests\Util;
 
+use PHPUnit\Framework\TestCase;
 use Platformsh\Cli\Util\OsUtil;
 
-class OsUtilTest extends \PHPUnit_Framework_TestCase
+class OsUtilTest extends TestCase
 {
     public function testEscapePosixShellArg()
     {

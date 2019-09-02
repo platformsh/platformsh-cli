@@ -1,10 +1,13 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Command\Service\MongoDB;
 
 use Platformsh\Cli\Command\CommandBase;
 use Platformsh\Cli\Model\Host\RemoteHost;
 use Platformsh\Cli\Service\Relationships;
+use Platformsh\Cli\Service\Selector;
+use Platformsh\Cli\Service\Shell;
 use Platformsh\Cli\Service\Ssh;
 use Platformsh\Cli\Util\OsUtil;
 use Symfony\Component\Console\Input\InputInterface;
@@ -13,18 +16,43 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class MongoShellCommand extends CommandBase
 {
+    protected static $defaultName = 'service:mongo:shell';
+
+    private $relationships;
+    private $selector;
+    private $shell;
+    private $ssh;
+
+    public function __construct(
+        Relationships $relationships,
+        Selector $selector,
+        Shell $shell,
+        Ssh $ssh
+    ) {
+        $this->relationships = $relationships;
+        $this->selector = $selector;
+        $this->shell = $shell;
+        $this->ssh = $ssh;
+        parent::__construct();
+    }
+
     protected function configure()
     {
-        $this->setName('service:mongo:shell');
         $this->setAliases(['mongo']);
         $this->setDescription('Use the MongoDB shell');
         $this->addOption('eval', null, InputOption::VALUE_REQUIRED, 'Pass a JavaScript fragment to the shell');
-        Relationships::configureInput($this->getDefinition());
-        Ssh::configureInput($this->getDefinition());
-        $this->addProjectOption()
-            ->addEnvironmentOption()
-            ->addAppOption();
+
+        $definition = $this->getDefinition();
+        $this->relationships->configureInput($definition);
+        $this->ssh->configureInput($definition);
+        $this->selector->addAllOptions($definition);
+
         $this->addExample('Display collection names', "--eval 'printjson(db.getCollectionNames())'");
+    }
+
+    public function canBeRunMultipleTimes(): bool
+    {
+        return false;
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
@@ -33,16 +61,15 @@ class MongoShellCommand extends CommandBase
             throw new \RuntimeException('The mongo-shell command cannot run via multi');
         }
 
-        /** @var \Platformsh\Cli\Service\Relationships $relationshipsService */
-        $relationshipsService = $this->getService('relationships');
-        $host = $this->selectHost($input, $relationshipsService->hasLocalEnvVar());
+        $selection = $this->selector->getSelection($input, false, $this->relationships->hasLocalEnvVar());
+        $host = $selection->getHost();
 
-        $service = $relationshipsService->chooseService($host, $input, $output, ['mongodb']);
+        $service = $this->relationships->chooseService($host, $input, $output, ['mongodb']);
         if (!$service) {
             return 1;
         }
 
-        $command = 'mongo ' . $relationshipsService->getDbCommandArgs('mongo', $service);
+        $command = 'mongo ' . $this->relationships->getDbCommandArgs('mongo', $service);
 
         if ($input->getOption('eval')) {
             $command .= ' --eval ' . OsUtil::escapePosixShellArg($input->getOption('eval'));

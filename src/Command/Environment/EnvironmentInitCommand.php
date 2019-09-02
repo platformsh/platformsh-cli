@@ -1,7 +1,15 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Environment;
 
 use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\ActivityService;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\QuestionHelper;
+use Platformsh\Cli\Service\Selector;
+use Symfony\Component\Console\Exception\InvalidArgumentException;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -9,24 +17,46 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class EnvironmentInitCommand extends CommandBase
 {
+    protected static $defaultName = 'environment:init';
+
+    private $api;
+    private $activityService;
+    private $config;
+    private $questionHelper;
+    private $selector;
+
+    public function __construct(
+        Api $api,
+        ActivityService $activityService,
+        Config $config,
+        QuestionHelper $questionHelper,
+        Selector $selector
+    ) {
+        $this->api = $api;
+        $this->activityService = $activityService;
+        $this->config = $config;
+        $this->questionHelper = $questionHelper;
+        $this->selector = $selector;
+        parent::__construct();
+    }
+
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('environment:init')
-            ->setDescription('Initialize an environment from a public Git repository')
-            ->addArgument('url', InputArgument::REQUIRED, 'A URL to a Git repository')
+        $this->setDescription('Initialize an environment from a public Git repository');
+        $this->addArgument('url', InputArgument::REQUIRED, 'A URL to a Git repository')
             ->addOption('profile', null, InputOption::VALUE_REQUIRED, 'The name of the profile');
 
-        if ($this->config()->get('service.name') === 'Platform.sh') {
+        $definition = $this->getDefinition();
+        $this->selector->addEnvironmentOption($definition);
+        $this->selector->addProjectOption($definition);
+        $this->activityService->configureInput($definition);
+
+        if ($this->config->get('service.name') === 'Platform.sh') {
             $this->addExample('Initialize using the Platform.sh Go template', 'https://github.com/platformsh/template-golang');
         }
-
-        $this->addProjectOption()
-            ->addEnvironmentOption()
-            ->addWaitOptions();
     }
 
     /**
@@ -34,12 +64,19 @@ class EnvironmentInitCommand extends CommandBase
      */
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input, true);
-        if (!$this->hasSelectedEnvironment()) {
-            $this->selectEnvironment('master');
+        $selection = $this->selector->getSelection($input);
+        $project = $selection->getProject();
+        if ($selection->hasEnvironment()) {
+            $environment = $selection->getEnvironment();
+        } else {
+            $environment = $this->api->getEnvironment(
+                $this->api->getDefaultEnvironmentId($this->api->getEnvironments($project)),
+                $project
+            );
+            if (!$environment) {
+                throw new InvalidArgumentException('No environment selected');
+            }
         }
-
-        $environment = $this->getSelectedEnvironment();
 
         $url = $input->getArgument('url');
         $profile = $input->getOption('profile') ?: basename($url);
@@ -63,11 +100,13 @@ class EnvironmentInitCommand extends CommandBase
             return 1;
         }
 
+        $this->api->clearEnvironmentsCache($project->id);
+
         // Summarize this action with a message.
         $message = 'Initializing project ';
-        $message .= $this->api()->getProjectLabel($this->getSelectedProject());
+        $message .= $this->api->getProjectLabel($project);
         if ($environment->id !== 'master') {
-            $message .= ', environment ' . $this->api()->getEnvironmentLabel($environment);
+            $message .= ', environment ' . $this->api->getEnvironmentLabel($environment);
         }
         if ($input->getOption('profile')) {
             $message .= ' with profile <info>' . $profile . '</info> (' . $url . ')';
@@ -78,12 +117,8 @@ class EnvironmentInitCommand extends CommandBase
 
         $activity = $environment->initialize($profile, $url);
 
-        $this->api()->clearEnvironmentsCache($environment->project);
-
-        if ($this->shouldWait($input)) {
-            /** @var \Platformsh\Cli\Service\ActivityMonitor $activityMonitor */
-            $activityMonitor = $this->getService('activity_monitor');
-            $activityMonitor->waitAndLog($activity);
+        if ($this->activityService->shouldWait($input)) {
+            $this->activityService->waitAndLog($activity);
         }
 
         return 0;

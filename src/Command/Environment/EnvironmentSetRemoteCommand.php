@@ -1,22 +1,47 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Environment;
 
 use Platformsh\Cli\Command\CommandBase;
 use Platformsh\Cli\Exception\RootNotFoundException;
+use Platformsh\Cli\Local\LocalProject;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\Git;
+use Platformsh\Cli\Service\Selector;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
 class EnvironmentSetRemoteCommand extends CommandBase
 {
-    // @todo remove this command in v3
-    protected $hiddenInList = true;
+    protected static $defaultName = 'environment:set-remote';
+
+    private $api;
+    private $config;
+    private $git;
+    private $localProject;
+    private $selector;
+
+    public function __construct(
+        Api $api,
+        Config $config,
+        Git $git,
+        LocalProject $localProject,
+        Selector $selector
+    ) {
+        $this->api = $api;
+        $this->config = $config;
+        $this->git = $git;
+        $this->localProject = $localProject;
+        $this->selector = $selector;
+        parent::__construct();
+    }
 
     protected function configure()
     {
-        $this
-            ->setName('environment:set-remote')
-            ->setDescription('Set the remote environment to map to a branch')
+        $this->setDescription('Set the remote environment to map to a branch')
             ->addArgument(
                 'environment',
                 InputArgument::REQUIRED,
@@ -27,37 +52,36 @@ class EnvironmentSetRemoteCommand extends CommandBase
                 InputArgument::OPTIONAL,
                 'The Git branch to map (defaults to the current branch)'
             );
+        $this->setHidden(true);
         $this->addExample('Set the remote environment for this branch to "pr-655"', 'pr-655');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $project = $this->getCurrentProject();
+        $project = $this->selector->getCurrentProject();
         if (!$project) {
             throw new RootNotFoundException();
         }
 
-        $projectRoot = $this->getProjectRoot();
+        $projectRoot = $this->selector->getProjectRoot();
 
-        /** @var \Platformsh\Cli\Service\Git $git */
-        $git = $this->getService('git');
-        $git->setDefaultRepositoryDir($projectRoot);
+        $this->git->setDefaultRepositoryDir($projectRoot);
 
         $specifiedEnvironmentId = $input->getArgument('environment');
         if ($specifiedEnvironmentId != '0'
-            && !($specifiedEnvironment = $this->api()->getEnvironment($specifiedEnvironmentId, $project))) {
+            && !($specifiedEnvironment = $this->api->getEnvironment($specifiedEnvironmentId, $project))) {
             $this->stdErr->writeln("Environment not found: <error>$specifiedEnvironmentId</error>");
             return 1;
         }
 
         $specifiedBranch = $input->getArgument('branch');
         if ($specifiedBranch) {
-            if (!$git->branchExists($specifiedBranch)) {
+            if (!$this->git->branchExists($specifiedBranch)) {
                 $this->stdErr->writeln("Branch not found: <error>$specifiedBranch</error>");
                 return 1;
             }
         } else {
-            $specifiedBranch = $git->getCurrentBranch();
+            $specifiedBranch = $this->git->getCurrentBranch();
         }
 
         // Check whether the branch is mapped by default (its name or its Git
@@ -66,14 +90,14 @@ class EnvironmentSetRemoteCommand extends CommandBase
             && $specifiedEnvironment->status != 'inactive'
             && $specifiedEnvironmentId === $specifiedBranch;
         if ($specifiedEnvironmentId != '0' && !$mappedByDefault) {
-            $upstream = $git->getUpstream($specifiedBranch);
+            $upstream = $this->git->getUpstream($specifiedBranch);
             if (strpos($upstream, '/')) {
                 list(, $upstream) = explode('/', $upstream, 2);
             }
             if ($upstream === $specifiedEnvironmentId) {
                 $mappedByDefault = true;
             }
-            if (!$mappedByDefault && $git->branchExists($specifiedEnvironmentId)) {
+            if (!$mappedByDefault && $this->git->branchExists($specifiedEnvironmentId)) {
                 $this->stdErr->writeln(
                     "A local branch already exists named <comment>$specifiedEnvironmentId</comment>"
                 );
@@ -81,20 +105,18 @@ class EnvironmentSetRemoteCommand extends CommandBase
         }
 
         // Perform the mapping or unmapping.
-        /** @var \Platformsh\Cli\Local\LocalProject $localProject */
-        $localProject = $this->getService('local.project');
-        $projectConfig = $localProject->getProjectConfig($projectRoot);
+        $projectConfig = $this->localProject->getProjectConfig($projectRoot);
         $projectConfig += ['mapping' => []];
         if ($mappedByDefault || $specifiedEnvironmentId == '0') {
             unset($projectConfig['mapping'][$specifiedBranch]);
-            $localProject->writeCurrentProjectConfig($projectConfig, $projectRoot);
+            $this->localProject->writeCurrentProjectConfig($projectConfig, $projectRoot);
         } else {
             if (isset($projectConfig['mapping'])
                 && ($current = array_search($specifiedEnvironmentId, $projectConfig['mapping'])) !== false) {
                 unset($projectConfig['mapping'][$current]);
             }
             $projectConfig['mapping'][$specifiedBranch] = $specifiedEnvironmentId;
-            $localProject->writeCurrentProjectConfig($projectConfig, $projectRoot);
+            $this->localProject->writeCurrentProjectConfig($projectConfig, $projectRoot);
         }
 
         // Check the success of the operation.

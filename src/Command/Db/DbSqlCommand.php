@@ -1,9 +1,14 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Db;
 
 use Platformsh\Cli\Command\CommandBase;
-use Platformsh\Cli\Model\Host\LocalHost;
 use Platformsh\Cli\Model\Host\RemoteHost;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\QuestionHelper;
+use Platformsh\Cli\Service\Selector;
+use Platformsh\Cli\Service\Shell;
 use Platformsh\Cli\Service\Ssh;
 use Platformsh\Cli\Service\Relationships;
 use Platformsh\Cli\Util\OsUtil;
@@ -15,18 +20,45 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class DbSqlCommand extends CommandBase
 {
+    protected static $defaultName = 'db:sql';
+
+    private $api;
+    private $questionHelper;
+    private $relationships;
+    private $selector;
+    private $shell;
+    private $ssh;
+
+    public function __construct(
+        Api $api,
+        QuestionHelper $questionHelper,
+        Relationships $relationships,
+        Selector $selector,
+        Shell $shell,
+        Ssh $ssh
+    ) {
+        $this->api = $api;
+        $this->questionHelper = $questionHelper;
+        $this->relationships = $relationships;
+        $this->selector = $selector;
+        $this->shell = $shell;
+        $this->ssh = $ssh;
+        parent::__construct();
+    }
 
     protected function configure()
     {
-        $this->setName('db:sql')
-            ->setAliases(['sql'])
+        $this->setAliases(['sql'])
             ->setDescription('Run SQL on the remote database')
             ->addArgument('query', InputArgument::OPTIONAL, 'An SQL statement to execute')
-            ->addOption('raw', null, InputOption::VALUE_NONE, 'Produce raw, non-tabular output');
-        $this->addOption('schema', null, InputOption::VALUE_REQUIRED, 'The schema to dump. Omit to use the default schema (usually "main"). Pass an empty string to not use any schema.');
-        $this->addProjectOption()->addEnvironmentOption()->addAppOption();
-        Relationships::configureInput($this->getDefinition());
-        Ssh::configureInput($this->getDefinition());
+            ->addOption('raw', null, InputOption::VALUE_NONE, 'Produce raw, non-tabular output')
+            ->addOption('schema', null, InputOption::VALUE_REQUIRED, 'The schema to dump. Omit to use the default schema (usually "main"). Pass an empty string to not use any schema.');
+
+        $definition = $this->getDefinition();
+        $this->selector->addAllOptions($definition);
+        $this->relationships->configureInput($definition);
+        $this->ssh->configureInput($definition);
+
         $this->addExample('Open an SQL console on the remote database');
         $this->addExample('View tables on the remote database', "'SHOW TABLES'");
         $this->addExample('Import a dump file into the remote database', '< dump.sql');
@@ -39,24 +71,18 @@ class DbSqlCommand extends CommandBase
             throw new InvalidArgumentException('The query argument is required when running via "multi"');
         }
 
-        /** @var \Platformsh\Cli\Service\Relationships $relationships */
-        $relationships = $this->getService('relationships');
-        $host = $this->selectHost($input, $relationships->hasLocalEnvVar());
-        if ($host instanceof LocalHost && $this->api()->isLoggedIn()) {
-            $this->validateInput($input);
-        }
-
-        $database = $relationships->chooseDatabase($host, $input, $output);
+        $selection = $this->selector->getSelection($input, false, $this->relationships->hasLocalEnvVar());
+        $database = $this->relationships->chooseDatabase($selection->getHost(), $input, $output);
         if (empty($database)) {
             return 1;
         }
 
         $schema = $input->getOption('schema');
         if ($schema === null) {
-            if ($this->hasSelectedEnvironment()) {
+            if ($selection->hasEnvironment()) {
                 // Get information about the deployed service associated with the
                 // selected relationship.
-                $deployment = $this->api()->getCurrentDeployment($this->getSelectedEnvironment());
+                $deployment = $this->api->getCurrentDeployment($selection->getEnvironment());
                 $service = isset($database['service']) ? $deployment->getService($database['service']) : false;
             } else {
                 $service = false;
@@ -97,9 +123,7 @@ class DbSqlCommand extends CommandBase
                         $choices[$schema] .= ' (default)';
                     }
                 }
-                /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-                $questionHelper = $this->getService('question_helper');
-                $schema = $questionHelper->choose($choices, 'Enter a number to choose a schema:', $default . ' (default)', true);
+                $schema = $this->questionHelper->choose($choices, 'Enter a number to choose a schema:', $default . ' (default)', true);
                 $schema = $schema === '(none)' ? '' : $schema;
             }
         }
@@ -108,7 +132,7 @@ class DbSqlCommand extends CommandBase
 
         switch ($database['scheme']) {
             case 'pgsql':
-                $sqlCommand = 'psql ' . $relationships->getDbCommandArgs('psql', $database, $schema);
+                $sqlCommand = 'psql ' . $this->relationships->getDbCommandArgs('psql', $database, $schema);
                 if ($query) {
                     if ($input->getOption('raw')) {
                         $sqlCommand .= ' -t';
@@ -118,7 +142,7 @@ class DbSqlCommand extends CommandBase
                 break;
 
             default:
-                $sqlCommand = 'mysql --no-auto-rehash ' . $relationships->getDbCommandArgs('mysql', $database, $schema);
+                $sqlCommand = 'mysql --no-auto-rehash ' . $this->relationships->getDbCommandArgs('mysql', $database, $schema);
                 if ($query) {
                     if ($input->getOption('raw')) {
                         $sqlCommand .= ' --batch --raw';
@@ -127,6 +151,8 @@ class DbSqlCommand extends CommandBase
                 }
                 break;
         }
+
+        $host = $selection->getHost();
 
         if ($host instanceof RemoteHost && $this->isTerminal(STDIN)) {
             $host->setExtraSshArgs(['-t']);

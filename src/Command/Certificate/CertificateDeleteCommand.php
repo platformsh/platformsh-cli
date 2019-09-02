@@ -1,25 +1,49 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Certificate;
 
 use GuzzleHttp\Exception\BadResponseException;
 use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\ActivityService;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\QuestionHelper;
+use Platformsh\Cli\Service\Selector;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
 class CertificateDeleteCommand extends CommandBase
 {
+    protected static $defaultName = 'certificate:delete';
+
+    private $activityService;
+    private $api;
+    private $selector;
+    private $questionHelper;
+
+    public function __construct(
+        ActivityService $activityService,
+        Api $api,
+        Selector $selector,
+        QuestionHelper $questionHelper
+    ) {
+        $this->api = $api;
+        $this->selector = $selector;
+        $this->activityService = $activityService;
+        $this->questionHelper = $questionHelper;
+        parent::__construct();
+    }
+
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('certificate:delete')
-            ->setDescription('Delete a certificate from the project')
+        $this->setDescription('Delete a certificate from the project')
             ->addArgument('id', InputArgument::REQUIRED, 'The certificate ID (or the start of it)');
-        $this->addProjectOption();
-        $this->addWaitOptions();
+        $this->selector->addProjectOption($this->getDefinition());
+        $this->activityService->configureInput($this->getDefinition());
     }
 
     /**
@@ -27,24 +51,20 @@ class CertificateDeleteCommand extends CommandBase
      */
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
-
+        $project = $this->selector->getSelection($input)->getProject();
         $id = $input->getArgument('id');
-        $project = $this->getSelectedProject();
 
         $certificate = $project->getCertificate($id);
         if (!$certificate) {
             try {
-                $certificate = $this->api()->matchPartialId($id, $project->getCertificates(), 'Certificate');
+                $certificate = $this->api->matchPartialId($id, $project->getCertificates(), 'Certificate');
             } catch (\InvalidArgumentException $e) {
                 $this->stdErr->writeln($e->getMessage());
                 return 1;
             }
         }
 
-        /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-        $questionHelper = $this->getService('question_helper');
-        if (!$questionHelper->confirm(sprintf('Are you sure you want to delete the certificate <info>%s</info>?', $certificate->id))) {
+        if (!$this->questionHelper->confirm(sprintf('Are you sure you want to delete the certificate <info>%s</info>?', $certificate->id))) {
             return 1;
         }
 
@@ -61,10 +81,8 @@ class CertificateDeleteCommand extends CommandBase
 
         $this->stdErr->writeln(sprintf('The certificate <info>%s</info> has been deleted.', $certificate->id));
 
-        if ($this->shouldWait($input)) {
-            /** @var \Platformsh\Cli\Service\ActivityMonitor $activityMonitor */
-            $activityMonitor = $this->getService('activity_monitor');
-            $activityMonitor->waitMultiple($result->getActivities(), $project);
+        if ($this->activityService->shouldWait($input)) {
+            $this->activityService->waitMultiple($result->getActivities(), $project);
         }
 
         return 0;

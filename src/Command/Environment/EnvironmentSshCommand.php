@@ -1,7 +1,13 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Environment;
 
 use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\Selector;
+use Platformsh\Cli\Service\Shell;
 use Platformsh\Cli\Service\Ssh;
 use Symfony\Component\Console\Exception\InvalidArgumentException;
 use Symfony\Component\Console\Input\InputArgument;
@@ -11,33 +17,55 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class EnvironmentSshCommand extends CommandBase
 {
+    protected static $defaultName = 'environment:ssh';
+
+    private $api;
+    private $config;
+    private $selector;
+    private $shell;
+    private $ssh;
+
+    public function __construct(
+        Api $api,
+        Config $config,
+        Selector $selector,
+        Shell $shell,
+        Ssh $ssh
+    ) {
+        $this->api = $api;
+        $this->config = $config;
+        $this->selector = $selector;
+        $this->shell = $shell;
+        $this->ssh = $ssh;
+        parent::__construct();
+    }
+
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('environment:ssh')
-            ->setAliases(['ssh'])
+        $this->setAliases(['ssh'])
             ->addArgument('cmd', InputArgument::OPTIONAL | InputArgument::IS_ARRAY, 'A command to run on the environment.')
             ->addOption('pipe', null, InputOption::VALUE_NONE, 'Output the SSH URL only.')
             ->addOption('all', null, InputOption::VALUE_NONE, 'Output all SSH URLs (for every app).')
             ->setDescription('SSH to the current environment');
-        $this->addProjectOption()
-             ->addEnvironmentOption()
-             ->addRemoteContainerOptions();
-        Ssh::configureInput($this->getDefinition());
+
+        $definition = $this->getDefinition();
+        $this->selector->addAllOptions($definition, true);
+        $this->ssh->configureInput($definition);
+
         $this->addExample('Open a shell over SSH');
         $this->addExample('List files', 'ls');
         $this->addExample("Monitor the app log (use '--' before options)", 'tail /var/log/app.log -- -n50 -f');
-        $envPrefix = $this->config()->get('service.env_prefix');
+        $envPrefix = $this->config->get('service.env_prefix');
         $this->addExample('Display relationships (use quotes for complex syntax)', "'echo \${$envPrefix}RELATIONSHIPS | base64 --decode'");
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
-        $environment = $this->getSelectedEnvironment();
+        $selection = $this->selector->getSelection($input);
+        $environment = $selection->getEnvironment();
 
         if ($input->getOption('all')) {
             $output->writeln(array_values($environment->getSshUrls()));
@@ -45,11 +73,12 @@ class EnvironmentSshCommand extends CommandBase
             return 0;
         }
 
-        $container = $this->selectRemoteContainer($input);
+        $container = $this->selector->getSelection($input)->getRemoteContainer();
         $sshUrl = $container->getSshUrl();
 
         if ($input->getOption('pipe')) {
             $output->write($sshUrl);
+
             return 0;
         }
 
@@ -61,10 +90,8 @@ class EnvironmentSshCommand extends CommandBase
             throw new InvalidArgumentException('The cmd argument is required when running via "multi"');
         }
 
-        /** @var \Platformsh\Cli\Service\Ssh $ssh */
-        $ssh = $this->getService('ssh');
         $sshOptions = [];
-        $command = $ssh->getSshCommand($sshOptions);
+        $command = $this->ssh->getSshCommand($sshOptions);
         if ($this->isTerminal(STDIN)) {
             $command .= ' -t';
         }
@@ -73,9 +100,6 @@ class EnvironmentSshCommand extends CommandBase
             $command .= ' ' . escapeshellarg($remoteCommand);
         }
 
-        /** @var \Platformsh\Cli\Service\Shell $shell */
-        $shell = $this->getService('shell');
-
-        return $shell->executeSimple($command);
+        return $this->shell->executeSimple($command);
     }
 }

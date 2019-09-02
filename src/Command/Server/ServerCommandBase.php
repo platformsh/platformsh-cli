@@ -1,7 +1,11 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Server;
 
 use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Local\LocalProject;
+use Platformsh\Cli\Service\Config;
 use Platformsh\Cli\Util\PortUtil;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Output\StreamOutput;
@@ -11,11 +15,23 @@ use Symfony\Component\Process\Process;
 abstract class ServerCommandBase extends CommandBase
 {
     protected $serverInfo;
-    protected $local = true;
+
+    private $config;
+    private $localProject;
+
+    public function __construct(
+        Config $config,
+        LocalProject $localProject
+    )
+    {
+        $this->config = $config;
+        $this->localProject = $localProject;
+        parent::__construct();
+    }
 
     public function isEnabled()
     {
-        return $this->config()->isExperimentEnabled('enable_local_server')
+        return $this->config->isExperimentEnabled('enable_local_server')
             && parent::isEnabled();
     }
 
@@ -97,7 +113,7 @@ abstract class ServerCommandBase extends CommandBase
         if (!isset($this->serverInfo)) {
             $this->serverInfo = [];
             // @todo move this to State service (in a new major version)
-            $filename = $this->config()->getWritableUserDir() . '/local-servers.json';
+            $filename = $this->config->getWritableUserDir() . '/local-servers.json';
             if (file_exists($filename)) {
                 $this->serverInfo = (array) json_decode(file_get_contents($filename), true);
             }
@@ -119,7 +135,7 @@ abstract class ServerCommandBase extends CommandBase
 
     protected function saveServerInfo()
     {
-        $filename = $this->config()->getWritableUserDir() . '/local-servers.json';
+        $filename = $this->config->getWritableUserDir() . '/local-servers.json';
         if (!empty($this->serverInfo)) {
             if (!file_put_contents($filename, json_encode($this->serverInfo))) {
                 throw new \RuntimeException('Failed to write server info to: ' . $filename);
@@ -207,7 +223,7 @@ abstract class ServerCommandBase extends CommandBase
      */
     protected function getPidFile($address)
     {
-        return $this->config()->getWritableUserDir() . '/server-' . preg_replace('/\W+/', '-', $address) . '.pid';
+        return $this->config->getWritableUserDir() . '/server-' . preg_replace('/\W+/', '-', $address) . '.pid';
     }
 
     /**
@@ -268,7 +284,7 @@ abstract class ServerCommandBase extends CommandBase
         $process->setTimeout(null);
         $env += $this->createEnv($projectRoot, $docRoot, $address, $appConfig);
         $process->setEnv($env);
-        $envPrefix = $this->config()->get('service.env_prefix');
+        $envPrefix = $this->config->get('service.env_prefix');
         if (isset($env[$envPrefix . 'APP_DIR'])) {
             $process->setWorkingDirectory($env[$envPrefix . 'APP_DIR']);
         }
@@ -311,7 +327,7 @@ abstract class ServerCommandBase extends CommandBase
             throw new \RuntimeException(sprintf('Router not found: <error>%s</error>', $router_src));
         }
 
-        $router = $projectRoot . '/' . $this->config()->get('local.local_dir') . '/' . basename($router_src);
+        $router = $projectRoot . '/' . $this->config->get('local.local_dir') . '/' . basename($router_src);
         if (!isset($created[$router])) {
             if (!file_put_contents($router, file_get_contents($router_src))) {
                 throw new \RuntimeException(sprintf('Could not create router file: <error>%s</error>', $router));
@@ -345,9 +361,7 @@ abstract class ServerCommandBase extends CommandBase
      */
     protected function getRoutesList($projectRoot, $address)
     {
-        /** @var \Platformsh\Cli\Local\LocalProject $localProject */
-        $localProject = $this->getService('local.project');
-        $routesConfig = (array) $localProject->readProjectConfigFile($projectRoot, 'routes.yaml');
+        $routesConfig = (array) $this->localProject->readProjectConfigFile($projectRoot, 'routes.yaml');
 
         $routes = [];
         foreach ($routesConfig as $route => $config) {
@@ -379,7 +393,7 @@ abstract class ServerCommandBase extends CommandBase
     protected function createEnv($projectRoot, $docRoot, $address, array $appConfig)
     {
         $realDocRoot = realpath($docRoot);
-        $envPrefix = $this->config()->get('service.env_prefix');
+        $envPrefix = $this->config->get('service.env_prefix');
         $env = [
             '_PLATFORM_VARIABLES_PREFIX' => $envPrefix,
             $envPrefix . 'ENVIRONMENT' => '_local',
@@ -391,18 +405,14 @@ abstract class ServerCommandBase extends CommandBase
 
         list($env['IP'], $env['PORT']) = explode(':', $address);
 
-        if (dirname($realDocRoot, 2) === $projectRoot . '/' . $this->config()->get('local.build_dir')) {
+        if (dirname($realDocRoot, 2) === $projectRoot . '/' . $this->config->get('local.build_dir')) {
             $env[$envPrefix . 'APP_DIR'] = dirname($realDocRoot);
         }
 
-        if ($projectRoot === $this->getProjectRoot()) {
-            try {
-                $project = $this->getCurrentProject();
-                if ($project) {
-                    $env[$envPrefix . 'PROJECT'] = $project->id;
-                }
-            } catch (\Exception $e) {
-                // Ignore errors
+        if ($projectRoot === $this->localProject->getProjectRoot()) {
+            $projectConfig = $this->localProject->getProjectConfig($projectRoot);
+            if ($projectConfig && isset($projectConfig['id'])) {
+                $env[$envPrefix . 'PROJECT'] = $projectConfig['id'];
             }
         }
 

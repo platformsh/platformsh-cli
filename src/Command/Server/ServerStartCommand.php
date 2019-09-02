@@ -1,9 +1,15 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Server;
 
 use Platformsh\Cli\Exception\RootNotFoundException;
 use Platformsh\Cli\Local\LocalApplication;
 use Platformsh\Cli\Local\BuildFlavor\Drupal;
+use Platformsh\Cli\Local\LocalProject;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\QuestionHelper;
+use Platformsh\Cli\Service\SubCommandRunner;
 use Platformsh\Cli\Service\Url;
 use Platformsh\Cli\Util\PortUtil;
 use Platformsh\Cli\Console\ProcessManager;
@@ -14,17 +20,38 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class ServerStartCommand extends ServerCommandBase
 {
+    protected static $defaultName = 'server:start';
+
+    private $config;
+    private $localProject;
+    private $questionHelper;
+    private $subCommandRunner;
+    private $urlService;
+
+    public function __construct(
+        Config $config,
+        LocalProject $localProject,
+        QuestionHelper $questionHelper,
+        SubCommandRunner $subCommandRunner,
+        Url $url
+    ) {
+        $this->config = $config;
+        $this->localProject = $localProject;
+        $this->questionHelper = $questionHelper;
+        $this->subCommandRunner = $subCommandRunner;
+        $this->urlService = $url;
+        parent::__construct($config, $localProject);
+    }
+
     protected function configure()
     {
-        $this
-          ->setName('server:start')
-          ->setDescription('Run PHP web server(s) for the local project')
+        $this->setDescription('Run PHP web server(s) for the local project')
           ->addOption('force', 'f', InputOption::VALUE_NONE, 'Force starting servers')
           ->addOption('ip', null, InputOption::VALUE_REQUIRED, 'The IP address', '127.0.0.1')
           ->addOption('port', null, InputOption::VALUE_REQUIRED, 'The port of the first server')
-          ->addOption('log', null, InputOption::VALUE_REQUIRED, 'The name of a log file. Defaults to ' . $this->config()->get('local.local_dir') . '/server.log')
-          ->addOption('tunnel', null, InputOption::VALUE_NONE, 'Incorporate SSH tunnels to remote ' . $this->config()->get('service.name') . ' environments as relationships');
-        Url::configureInput($this->getDefinition());
+          ->addOption('log', null, InputOption::VALUE_REQUIRED, 'The name of a log file. Defaults to ' . $this->config->get('local.local_dir') . '/server.log')
+          ->addOption('tunnel', null, InputOption::VALUE_NONE, 'Incorporate SSH tunnels to remote ' . $this->config->get('service.name') . ' environments as relationships');
+        $this->urlService->configureInput($this->getDefinition());
     }
 
     public function isEnabled()
@@ -34,7 +61,7 @@ class ServerStartCommand extends ServerCommandBase
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $projectRoot = $this->getProjectRoot();
+        $projectRoot = $this->localProject->getProjectRoot();
         if (!$projectRoot) {
             throw new RootNotFoundException();
         }
@@ -57,7 +84,7 @@ class ServerStartCommand extends ServerCommandBase
             return 1;
         }
 
-        $executable = $this->config()->get('application.executable');
+        $executable = $this->config->get('application.executable');
 
         $items = [];
         foreach ($apps as $app) {
@@ -88,7 +115,7 @@ class ServerStartCommand extends ServerCommandBase
 
             if ($input->getOption('tunnel')) {
                 $bufferedOutput = new BufferedOutput();
-                $result = $this->runOtherCommand(
+                $result = $this->subCommandRunner->run(
                     'tunnel:info',
                     ['--encode' => true] + ($app->isSingle() ? [] : ['--app' => $appId]),
                     $bufferedOutput
@@ -106,7 +133,7 @@ class ServerStartCommand extends ServerCommandBase
                     continue;
                 }
                 $relationships = $bufferedOutput->fetch();
-                $items[$appId]['env'][$this->config()->get('service.env_prefix') . 'RELATIONSHIPS'] = $relationships;
+                $items[$appId]['env'][$this->config->get('service.env_prefix') . 'RELATIONSHIPS'] = $relationships;
             }
         }
 
@@ -115,7 +142,7 @@ class ServerStartCommand extends ServerCommandBase
         }
 
         $logFile = $input->getOption('log')
-            ?: $projectRoot . '/' . $this->config()->get('local.local_dir') . '/server.log';
+            ?: $projectRoot . '/' . $this->config->get('local.local_dir') . '/server.log';
         $log = $this->openLog($logFile);
         if (!$log) {
             $this->stdErr->writeln(sprintf('Failed to open log file for writing: <error>%s</error>', $logFile));
@@ -218,11 +245,9 @@ class ServerStartCommand extends ServerCommandBase
         if (count($processes)) {
             $this->stdErr->writeln(sprintf('Logs are written to: %s', $logFile));
 
-            /** @var Url $urlService */
-            $urlService = $this->getService('url');
             foreach ($processes as $address => $process) {
                 if ($process->isRunning()) {
-                    $urlService->openUrl('http://' . $address);
+                    $this->urlService->openUrl('http://' . $address);
                 }
             }
 

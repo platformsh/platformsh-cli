@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 /**
  * @file
  * Override Symfony Console's ListCommand to customize the list's appearance.
@@ -15,6 +16,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class ListCommand extends ParentListCommand
 {
+    protected static $defaultName = 'list';
 
     protected function configure()
     {

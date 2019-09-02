@@ -1,9 +1,14 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Server;
 
 use Platformsh\Cli\Exception\RootNotFoundException;
 use Platformsh\Cli\Local\LocalApplication;
 use Platformsh\Cli\Local\BuildFlavor\Drupal;
+use Platformsh\Cli\Local\LocalProject;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\QuestionHelper;
 use Platformsh\Cli\Service\Url;
 use Platformsh\Cli\Util\PortUtil;
 use Symfony\Component\Console\Input\InputInterface;
@@ -13,22 +18,41 @@ use Symfony\Component\Process\Exception\RuntimeException;
 
 class ServerRunCommand extends ServerCommandBase
 {
+    protected static $defaultName = 'server:run';
+
+    private $config;
+    private $localProject;
+    private $questionHelper;
+    private $urlService;
+
+    public function __construct(
+        Config $config,
+        LocalProject $localProject,
+        QuestionHelper $questionHelper,
+        Url $url
+    )
+    {
+        $this->config = $config;
+        $this->localProject = $localProject;
+        $this->questionHelper = $questionHelper;
+        $this->urlService = $url;
+        parent::__construct($config, $localProject);
+    }
+
     protected function configure()
     {
-        $this
-          ->setName('server:run')
-          ->setDescription('Run a local PHP web server')
+        $this->setDescription('Run a local PHP web server')
           ->addOption('force', 'f', InputOption::VALUE_NONE, 'Force starting server')
           ->addOption('app', null, InputOption::VALUE_REQUIRED, 'The app name')
           ->addOption('ip', null, InputOption::VALUE_REQUIRED, 'The IP address', '127.0.0.1')
           ->addOption('port', null, InputOption::VALUE_REQUIRED, 'The port')
           ->addOption('log', null, InputOption::VALUE_REQUIRED, 'The name of a log file (logs are written to stderr by default)');
-        Url::configureInput($this->getDefinition());
+        $this->urlService->configureInput($this->getDefinition());
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $projectRoot = $this->getProjectRoot();
+        $projectRoot = $this->localProject->getProjectRoot();
         if (!$projectRoot) {
             throw new RootNotFoundException();
         }
@@ -51,16 +75,13 @@ class ServerRunCommand extends ServerCommandBase
             return 1;
         }
 
-        /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-        $questionHelper = $this->getService('question_helper');
-
         $appId = $input->getOption('app');
         if (!$appId) {
             $appChoices = [];
             foreach ($apps as $appCandidate) {
                 $appChoices[$appCandidate->getId()] = $appCandidate->getId();
             }
-            $appId = $questionHelper->choose($appChoices, 'Enter a number to choose an app:');
+            $appId = $this->questionHelper->choose($appChoices, 'Enter a number to choose an app:');
         }
         foreach ($apps as $appCandidate) {
             if ($appCandidate->getId() === $appId) {
@@ -78,7 +99,7 @@ class ServerRunCommand extends ServerCommandBase
             $this->stdErr->writeln(sprintf('Document root not found: <error>%s</error>', $docRoot));
             $this->stdErr->writeln(sprintf(
                 'Build the application with: <comment>%s build</comment>',
-                $this->config()->get('application.executable')
+                $this->config->get('application.executable')
             ));
             return 1;
         }
@@ -173,9 +194,7 @@ class ServerRunCommand extends ServerCommandBase
         sleep(1);
 
         if ($process->isRunning()) {
-            /** @var Url $urlService */
-            $urlService = $this->getService('url');
-            $urlService->openUrl('http://' . $address);
+            $this->urlService->openUrl('http://' . $address);
         }
 
         try {

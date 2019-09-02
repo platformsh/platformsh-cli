@@ -1,23 +1,37 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Domain;
 
 use GuzzleHttp\Exception\ClientException;
+use Platformsh\Cli\Service\ActivityService;
+use Platformsh\Cli\Service\Selector;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
 class DomainAddCommand extends DomainCommandBase
 {
+    protected static $defaultName = 'domain:add';
+
+    private $activityService;
+    private $selector;
+
+    public function __construct(Selector $selector, ActivityService $activityService)
+    {
+        $this->selector = $selector;
+        $this->activityService = $activityService;
+        parent::__construct();
+    }
 
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('domain:add')
-            ->setDescription('Add a new domain to the project');
+        $this->setDescription('Add a new domain to the project');
         $this->addDomainOptions();
-        $this->addProjectOption()->addWaitOptions();
+        $this->selector->addProjectOption($this->getDefinition());
+        $this->activityService->configureInput($this->getDefinition());
         $this->addExample('Add the domain example.com', 'example.com');
         $this->addExample(
             'Add the domain secure.example.com with SSL enabled',
@@ -30,13 +44,11 @@ class DomainAddCommand extends DomainCommandBase
      */
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
+        $project = $this->selector->getSelection($input)->getProject();
 
         if (!$this->validateDomainInput($input)) {
             return 1;
         }
-
-        $project = $this->getSelectedProject();
 
         try {
             $this->stdErr->writeln("Adding the domain <info>{$this->domainName}</info>");
@@ -54,10 +66,8 @@ class DomainAddCommand extends DomainCommandBase
             return 1;
         }
 
-        if ($this->shouldWait($input)) {
-            /** @var \Platformsh\Cli\Service\ActivityMonitor $activityMonitor */
-            $activityMonitor = $this->getService('activity_monitor');
-            $activityMonitor->waitMultiple($result->getActivities(), $project);
+        if ($this->activityService->shouldWait($input)) {
+            $this->activityService->waitMultiple($result->getActivities(), $project);
         }
 
         return 0;

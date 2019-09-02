@@ -1,10 +1,12 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Exception;
 
 use Platformsh\Cli\Service\Config;
+use Symfony\Component\Console\Exception\ExceptionInterface;
 
-class RootNotFoundException extends \RuntimeException
+class RootNotFoundException extends \RuntimeException implements ExceptionInterface
 {
     public function __construct(
         $message = 'Project root not found. This can only be run from inside a project directory.',

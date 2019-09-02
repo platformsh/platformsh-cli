@@ -2,36 +2,32 @@
 
 namespace Platformsh\Cli\Tests\Command\App;
 
-use Platformsh\Cli\Command\WelcomeCommand;
-use Symfony\Component\Console\Input\ArrayInput;
-use Symfony\Component\Console\Output\BufferedOutput;
+use PHPUnit\Framework\TestCase;
+use Platformsh\Cli\Tests\CommandRunner;
 
-class WelcomeCommandTest extends \PHPUnit_Framework_TestCase
+/**
+ * @group commands
+ */
+class WelcomeCommandTest extends TestCase
 {
-    private function runCommand(array $args) {
-        $output = new BufferedOutput();
-        $input = new ArrayInput($args);
-        $input->setInteractive(false);
-        (new WelcomeCommand())
-            ->run($input, $output);
-
-        return $output->fetch();
-    }
-
     public function testWelcomeOnLocalContainer() {
         chdir('/');
-        putenv('PLATFORM_PROJECT=test-project');
-        putenv('PLATFORM_BRANCH=test-environment');
-        putenv('PLATFORM_ROUTES=' . base64_encode(json_encode([])));
-        putenv('PLATFORMSH_CLI_SESSION_ID=test' . rand(100, 999));
-        $result = $this->runCommand([]);
+
+        $result = (new CommandRunner())
+            ->run('welcome', [], [
+                'PLATFORM_PROJECT' => 'test-project',
+                'PLATFORM_BRANCH' => 'test-environment',
+                'PLATFORM_ROUTES' => base64_encode(json_encode([])),
+                'PLATFORMSH_CLI_SESSION_ID' => 'test' . rand(100, 999),
+            ]);
+
         $this->assertContains(
             'Project ID: test-project',
-            $result
+            $result->getErrorOutput()
         );
         $this->assertContains(
             'Local environment commands',
-            $result
+            $result->getErrorOutput()
         );
     }
 }

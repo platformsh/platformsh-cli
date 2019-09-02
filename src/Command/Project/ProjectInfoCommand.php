@@ -1,9 +1,14 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Project;
 
 use Platformsh\Cli\Command\CommandBase;
 use Platformsh\Cli\Console\AdaptiveTableCell;
+use Platformsh\Cli\Service\ActivityService;
+use Platformsh\Cli\Service\Api;
 use Platformsh\Cli\Service\PropertyFormatter;
+use Platformsh\Cli\Service\Selector;
 use Platformsh\Cli\Service\Table;
 use Platformsh\Client\Model\Project;
 use Symfony\Component\Console\Input\InputArgument;
@@ -13,23 +18,45 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class ProjectInfoCommand extends CommandBase
 {
-    /** @var \Platformsh\Cli\Service\PropertyFormatter|null */
-    protected $formatter;
+    protected static $defaultName = 'project:info';
+
+    private $activityService;
+    private $api;
+    private $formatter;
+    private $selector;
+    private $table;
+
+    public function __construct(
+        ActivityService $activityService,
+        Api $api,
+        PropertyFormatter $formatter,
+        Selector $selector,
+        Table $table
+    ) {
+        $this->activityService = $activityService;
+        $this->api = $api;
+        $this->formatter = $formatter;
+        $this->selector = $selector;
+        $this->table = $table;
+        parent::__construct();
+    }
 
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('project:info')
-            ->addArgument('property', InputArgument::OPTIONAL, 'The name of the property')
+        $this->addArgument('property', InputArgument::OPTIONAL, 'The name of the property')
             ->addArgument('value', InputArgument::OPTIONAL, 'Set a new value for the property')
             ->addOption('refresh', null, InputOption::VALUE_NONE, 'Whether to refresh the cache')
             ->setDescription('Read or set properties for a project');
-        PropertyFormatter::configureInput($this->getDefinition());
-        Table::configureInput($this->getDefinition());
-        $this->addProjectOption()->addWaitOptions();
+
+        $definition = $this->getDefinition();
+        $this->formatter->configureInput($definition);
+        $this->table->configureInput($definition);
+        $this->selector->addProjectOption($definition);
+        $this->activityService->configureInput($definition);
+
         $this->addExample('Read all project properties')
              ->addExample("Show the project's Git URL", 'git')
              ->addExample("Change the project's title", 'title "My project"');
@@ -38,10 +65,7 @@ class ProjectInfoCommand extends CommandBase
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
-
-        $project = $this->getSelectedProject();
-        $this->formatter = $this->getService('property_formatter');
+        $project = $this->selector->getSelection($input)->getProject();
 
         if ($input->getOption('refresh')) {
             $project->refresh();
@@ -63,7 +87,7 @@ class ProjectInfoCommand extends CommandBase
 
         $value = $input->getArgument('value');
         if ($value !== null) {
-            return $this->setProperty($property, $value, $project, !$this->shouldWait($input));
+            return $this->setProperty($property, $value, $project, !$this->activityService->shouldWait($input));
         }
 
         switch ($property) {
@@ -79,10 +103,10 @@ class ProjectInfoCommand extends CommandBase
                 throw new \InvalidArgumentException('Property not found: ' . $property);
 
             default:
-                $value = $this->api()->getNestedProperty($project, $property);
+                $value = $this->api->getNestedProperty($project, $property);
         }
 
-        $output->writeln($this->formatter->format($value, $property));
+        $output->write($this->formatter->format($value, $property));
 
         return 0;
     }
@@ -100,9 +124,7 @@ class ProjectInfoCommand extends CommandBase
             $headings[] = new AdaptiveTableCell($key, ['wrap' => false]);
             $values[] = $this->formatter->format($value, $key);
         }
-        /** @var \Platformsh\Cli\Service\Table $table */
-        $table = $this->getService('table');
-        $table->renderSimple($values, $headings);
+        $this->table->renderSimple($values, $headings);
 
         return 0;
     }
@@ -143,13 +165,11 @@ class ProjectInfoCommand extends CommandBase
             $this->formatter->format($value, $property)
         ));
 
-        $this->api()->clearProjectsCache();
+        $this->api->clearProjectsCache();
 
         $success = true;
         if (!$noWait) {
-            /** @var \Platformsh\Cli\Service\ActivityMonitor $activityMonitor */
-            $activityMonitor = $this->getService('activity_monitor');
-            $success = $activityMonitor->waitMultiple($result->getActivities(), $this->getSelectedProject());
+            $success = $this->activityService->waitMultiple($result->getActivities(), $project);
         }
 
         return $success ? 0 : 1;

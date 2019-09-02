@@ -4,8 +4,8 @@ The **Platform.sh CLI** is the official command-line interface for [Platform.sh]
 
 ## Requirements
 
-* Operating system: Linux, OS X, Windows Vista, Windows 7, Windows 8 Pro, or Windows 10 (Windows 8 Standard does not work due to an issue with symlink permissions)
-* PHP 5.5.9 or higher, with cURL support
+* Operating system: Linux, OS X, or Windows 10
+* PHP 7.1 or higher
 * Git
 * A Bash-like shell:
   * On OS X or Linux/Unix: SH, Bash, Dash or ZSH - usually the built-in shell will work.
@@ -274,6 +274,10 @@ Other customization is available via environment variables:
 * `PLATFORMSH_CLI_UPDATES_CHECK`: set to 0 to disable the automatic updates check
 * `CLICOLOR_FORCE`: set to 1 or 0 to force colorized output on or off, respectively
 * `http_proxy` or `https_proxy`: specify a proxy for connecting to Platform.sh
+
+## Migrating
+
+See [MIGRATING.md](MIGRATING.md) for help on migrating between major versions.
 
 ## Contributing
 

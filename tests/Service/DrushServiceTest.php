@@ -1,7 +1,9 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Tests;
 
+use PHPUnit\Framework\TestCase;
 use Platformsh\Cli\Service\Config;
 use Platformsh\Cli\Service\Drush;
 use Platformsh\Cli\Service\Filesystem;
@@ -12,7 +14,7 @@ use Symfony\Component\Yaml\Yaml;
 /**
  * @group slow
  */
-class DrushServiceTest extends \PHPUnit_Framework_TestCase
+class DrushServiceTest extends TestCase
 {
     use HasTempDirTrait;
 

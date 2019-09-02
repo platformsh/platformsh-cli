@@ -2,9 +2,10 @@
 
 namespace Platformsh\Cli\Tests;
 
+use PHPUnit\Framework\TestCase;
 use Platformsh\Cli\Service\Identifier;
 
-class IdentifierTest extends \PHPUnit_Framework_TestCase
+class IdentifierTest extends TestCase
 {
 
     public function testIdentify()

@@ -1,37 +1,69 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Variable;
 
+use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\ActivityService;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\QuestionHelper;
+use Platformsh\Cli\Service\Selector;
+use Platformsh\Cli\Service\VariableService;
 use Platformsh\Client\Model\Variable;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
-class VariableDeleteCommand extends VariableCommandBase
+class VariableDeleteCommand extends CommandBase
 {
+    protected static $defaultName = 'variable:delete';
+
+    private $activityService;
+    private $api;
+    private $questionHelper;
+    private $selector;
+    private $variableService;
+
+    public function __construct(
+        ActivityService $activityService,
+        Api $api,
+        QuestionHelper $questionHelper,
+        Selector $selector,
+        VariableService $variableService
+    ) {
+        $this->activityService = $activityService;
+        $this->api = $api;
+        $this->questionHelper = $questionHelper;
+        $this->selector = $selector;
+        $this->variableService = $variableService;
+        parent::__construct();
+    }
+
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('variable:delete')
-            ->addArgument('name', InputArgument::REQUIRED, 'The variable name')
+        $this->addArgument('name', InputArgument::REQUIRED, 'The variable name')
             ->setDescription('Delete a variable');
-        $this->addLevelOption();
-        $this->addProjectOption()
-             ->addEnvironmentOption()
-             ->addWaitOptions();
+
+        $definition = $this->getDefinition();
+        $this->variableService->addLevelOption($definition);
+        $this->selector->addProjectOption($definition);
+        $this->selector->addEnvironmentOption($definition);
+        $this->activityService->configureInput($definition);
+
         $this->addExample('Delete the variable "example"', 'example');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $level = $this->getRequestedLevel($input);
-        $this->validateInput($input, $level === self::LEVEL_PROJECT);
+        $level = $this->variableService->getRequestedLevel($input);
+        $selection = $this->selector->getSelection($input, $level === VariableService::LEVEL_PROJECT);
 
         $variableName = $input->getArgument('name');
 
-        $variable = $this->getExistingVariable($variableName, $level);
+        $variable = $this->variableService->getExistingVariable($selection, $variableName, $level);
         if (!$variable) {
             return 1;
         }
@@ -50,13 +82,10 @@ class VariableDeleteCommand extends VariableCommandBase
             return 1;
         }
 
-        /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-        $questionHelper = $this->getService('question_helper');
-
-        switch ($this->getVariableLevel($variable)) {
+        switch ($this->variableService->getVariableLevel($variable)) {
             case 'environment':
-                $environmentId = $this->getSelectedEnvironment()->id;
-                $confirm = $questionHelper->confirm(
+                $environmentId = $selection->getEnvironment()->id;
+                $confirm = $this->questionHelper->confirm(
                     "Are you sure you want to delete the variable <info>$variableName</info> from the environment <info>$environmentId</info>?",
                     false
                 );
@@ -66,8 +95,8 @@ class VariableDeleteCommand extends VariableCommandBase
                 break;
 
             case 'project':
-                $confirm = $questionHelper->confirm(
-                    "Are you sure you want to delete the variable <info>$variableName</info> from the project " . $this->api()->getProjectLabel($this->getSelectedProject()) . "?",
+                $confirm = $this->questionHelper->confirm(
+                    "Are you sure you want to delete the variable <info>$variableName</info> from the project " . $this->api->getProjectLabel($selection->getProject()) . "?",
                     false
                 );
                 if (!$confirm) {
@@ -82,11 +111,9 @@ class VariableDeleteCommand extends VariableCommandBase
 
         $success = true;
         if (!$result->countActivities()) {
-            $this->redeployWarning();
-        } elseif ($this->shouldWait($input)) {
-            /** @var \Platformsh\Cli\Service\ActivityMonitor $activityMonitor */
-            $activityMonitor = $this->getService('activity_monitor');
-            $success = $activityMonitor->waitMultiple($result->getActivities(), $this->getSelectedProject());
+            $this->activityService->redeployWarning();
+        } elseif ($this->activityService->shouldWait($input)) {
+            $success = $this->activityService->waitMultiple($result->getActivities(), $selection->getProject());
         }
 
         return $success ? 0 : 1;

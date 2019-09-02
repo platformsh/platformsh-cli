@@ -1,8 +1,12 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Command\Mount;
 
 use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\Mount;
+use Platformsh\Cli\Service\PropertyFormatter;
+use Platformsh\Cli\Service\Selector;
 use Platformsh\Cli\Service\Table;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -11,21 +15,38 @@ use Symfony\Component\Console\Output\OutputInterface;
 class MountListCommand extends CommandBase
 {
 
+    protected static $defaultName = 'mount:list';
+
+    private $formatter;
+    private $mountService;
+    private $selector;
+    private $table;
+
+    public function __construct(
+        PropertyFormatter $formatter,
+        Mount $mountService,
+        Selector $selector,
+        Table $table
+    ) {
+        $this->formatter = $formatter;
+        $this->mountService = $mountService;
+        $this->selector = $selector;
+        $this->table = $table;
+        parent::__construct();
+    }
+
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('mount:list')
-            ->setAliases(['mounts'])
+        $this->setAliases(['mounts'])
             ->setDescription('Get a list of mounts')
             ->addOption('paths', null, InputOption::VALUE_NONE, 'Output the mount paths only (one per line)')
             ->addOption('refresh', null, InputOption::VALUE_NONE, 'Whether to refresh the cache');
-        Table::configureInput($this->getDefinition());
-        $this->addProjectOption();
-        $this->addEnvironmentOption();
-        $this->addRemoteContainerOptions();
+
+        $this->selector->addAllOptions($this->getDefinition(), true);
+        $this->table->configureInput($this->getDefinition());
     }
 
     /**
@@ -33,9 +54,9 @@ class MountListCommand extends CommandBase
      */
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
+        $selection = $this->selector->getSelection($input);
 
-        $container = $this->selectRemoteContainer($input);
+        $container = $this->selector->getSelection($input)->getRemoteContainer();
         $mounts = $container->getMounts();
 
         if (empty($mounts)) {
@@ -43,10 +64,7 @@ class MountListCommand extends CommandBase
 
             return 1;
         }
-
-        /** @var \Platformsh\Cli\Service\Mount $mountService */
-        $mountService = $this->getService('mount');
-        $mounts = $mountService->normalizeMounts($mounts);
+        $mounts = $this->mountService->normalizeMounts($mounts);
 
         if ($input->getOption('paths')) {
             $output->writeln(array_keys($mounts));
@@ -56,21 +74,20 @@ class MountListCommand extends CommandBase
 
         $header = ['path' => 'Mount path', 'definition' => 'Definition'];
         $rows = [];
-        /** @var \Platformsh\Cli\Service\PropertyFormatter $formatter */
-        $formatter = $this->getService('property_formatter');
         foreach ($mounts as $path => $definition) {
-            $rows[] = ['path' => $path, 'definition' => $formatter->format($definition)];
+            $rows[] = [
+                'path' => $path,
+                'definition' => $this->formatter->format($definition),
+            ];
         }
 
-        /** @var \Platformsh\Cli\Service\Table $table */
-        $table = $this->getService('table');
         $this->stdErr->writeln(sprintf(
             'Mounts in the %s <info>%s</info> (environment <info>%s</info>):',
             $container->getType(),
             $container->getName(),
-            $this->getSelectedEnvironment()->id
+            $selection->getEnvironment()->id
         ));
-        $table->render($rows, $header);
+        $this->table->render($rows, $header);
 
         return 0;
     }

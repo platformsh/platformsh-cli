@@ -1,8 +1,13 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\App;
 
 use Platformsh\Cli\Command\CommandBase;
 use Platformsh\Cli\Local\LocalApplication;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\Selector;
 use Platformsh\Cli\Service\Table;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -10,19 +15,35 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class AppListCommand extends CommandBase
 {
+    protected static $defaultName = 'app:list';
+
+    private $api;
+    private $config;
+    private $selector;
+    private $table;
+
+    public function __construct(Api $api, Config $config, Selector $selector, Table $table)
+    {
+        $this->api = $api;
+        $this->config = $config;
+        $this->selector = $selector;
+        $this->table = $table;
+        parent::__construct();
+    }
 
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this->setName('app:list')
-            ->setAliases(['apps'])
+        $this->setAliases(['apps'])
             ->setDescription('List apps in the project')
             ->addOption('refresh', null, InputOption::VALUE_NONE, 'Whether to refresh the cache');
-        $this->addProjectOption()
-            ->addEnvironmentOption();
-        Table::configureInput($this->getDefinition());
+
+        $definition = $this->getDefinition();
+        $this->selector->addProjectOption($definition);
+        $this->selector->addEnvironmentOption($definition);
+        $this->table->configureInput($definition);
     }
 
     /**
@@ -30,11 +51,11 @@ class AppListCommand extends CommandBase
      */
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
+        $selection = $this->selector->getSelection($input);
 
         // Find a list of deployed web apps.
-        $deployment = $this->api()
-            ->getCurrentDeployment($this->getSelectedEnvironment(), $input->getOption('refresh'));
+        $deployment = $this->api
+            ->getCurrentDeployment($selection->getEnvironment(), $input->getOption('refresh'));
         $apps = $deployment->webapps;
 
         if (!count($apps)) {
@@ -44,7 +65,7 @@ class AppListCommand extends CommandBase
                 $this->stdErr->writeln('');
                 $this->stdErr->writeln(sprintf(
                     'To list services, run: <info>%s services</info>',
-                    $this->config()->get('application.executable')
+                    $this->config->get('application.executable')
                 ));
             }
 
@@ -57,8 +78,8 @@ class AppListCommand extends CommandBase
         // @todo The "Local path" column is mainly here for legacy reasons, and can be removed in a future version.
         $showLocalPath = false;
         $localApps = [];
-        if (($projectRoot = $this->getProjectRoot()) && $this->selectedProjectIsCurrent()) {
-            $localApps = LocalApplication::getApplications($projectRoot, $this->config());
+        if (($projectRoot = $this->selector->getProjectRoot()) && $this->selector->getCurrentProject()->id === $selection->getProject()->id) {
+            $localApps = LocalApplication::getApplications($projectRoot, $this->config);
             $showLocalPath = true;
         }
         // Get the local path for a given application.
@@ -89,23 +110,21 @@ class AppListCommand extends CommandBase
             $rows[] = $row;
         }
 
-        /** @var \Platformsh\Cli\Service\Table $table */
-        $table = $this->getService('table');
-        if (!$table->formatIsMachineReadable()) {
+        if (!$this->table->formatIsMachineReadable()) {
             $this->stdErr->writeln(sprintf(
                 'Applications on the project <info>%s</info>, environment <info>%s</info>:',
-                $this->api()->getProjectLabel($this->getSelectedProject()),
-                $this->api()->getEnvironmentLabel($this->getSelectedEnvironment())
+                $this->api->getProjectLabel($selection->getProject()),
+                $this->api->getEnvironmentLabel($selection->getEnvironment())
             ));
         }
 
-        $table->render($rows, $headers, $defaultColumns);
+        $this->table->render($rows, $headers, $defaultColumns);
 
-        if (!$table->formatIsMachineReadable() && $deployment->services) {
+        if (!$this->table->formatIsMachineReadable() && $deployment->services) {
             $this->stdErr->writeln('');
             $this->stdErr->writeln(sprintf(
                 'To list services, run: <info>%s services</info>',
-                $this->config()->get('application.executable')
+                $this->config->get('application.executable')
             ));
         }
 

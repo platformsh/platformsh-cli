@@ -1,8 +1,15 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Environment;
 
 use Platformsh\Cli\Command\CommandBase;
 use Platformsh\Cli\Console\AdaptiveTableCell;
+use Platformsh\Cli\Local\LocalProject;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\PropertyFormatter;
+use Platformsh\Cli\Service\Selector;
 use Platformsh\Cli\Service\Table;
 use Platformsh\Client\Model\Environment;
 use Symfony\Component\Console\Input\InputInterface;
@@ -11,32 +18,53 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class EnvironmentListCommand extends CommandBase
 {
+    protected static $defaultName = 'environment:list';
 
-    protected $children = [];
+    private $api;
+    private $config;
+    private $formatter;
+    private $localProject;
+    private $selector;
+    private $table;
+
+    private $children = [];
 
     /** @var Environment */
-    protected $currentEnvironment;
-    protected $mapping = [];
+    private $currentEnvironment;
+    private $mapping = [];
 
-    /** @var \Platformsh\Cli\Service\PropertyFormatter */
-    protected $formatter;
+    public function __construct(
+        Api $api,
+        Config $config,
+        PropertyFormatter $formatter,
+        LocalProject $localProject,
+        Selector $selector,
+        Table $table
+    ) {
+        $this->api = $api;
+        $this->config = $config;
+        $this->formatter = $formatter;
+        $this->localProject = $localProject;
+        $this->selector = $selector;
+        $this->table = $table;
+        parent::__construct();
+    }
 
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('environment:list')
-            ->setAliases(['environments', 'env'])
+        $this->setAliases(['environments', 'env'])
             ->setDescription('Get a list of environments')
             ->addOption('no-inactive', 'I', InputOption::VALUE_NONE, 'Do not show inactive environments')
             ->addOption('pipe', null, InputOption::VALUE_NONE, 'Output a simple list of environment IDs.')
             ->addOption('refresh', null, InputOption::VALUE_REQUIRED, 'Whether to refresh the list.', 1)
             ->addOption('sort', null, InputOption::VALUE_REQUIRED, 'A property to sort by', 'title')
             ->addOption('reverse', null, InputOption::VALUE_NONE, 'Sort in reverse (descending) order');
-        Table::configureInput($this->getDefinition());
-        $this->addProjectOption();
+
+        $this->table->configureInput($this->getDefinition());
+        $this->selector->addProjectOption($this->getDefinition());
     }
 
     /**
@@ -133,11 +161,11 @@ class EnvironmentListCommand extends CommandBase
      */
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
+        $selection = $this->selector->getSelection($input);
 
         $refresh = $input->hasOption('refresh') && $input->getOption('refresh');
 
-        $environments = $this->api()->getEnvironments($this->getSelectedProject(), $refresh ? true : null);
+        $environments = $this->api->getEnvironments($selection->getProject(), $refresh ? true : null);
 
         if ($input->getOption('no-inactive')) {
             $environments = array_filter($environments, function ($environment) {
@@ -146,7 +174,7 @@ class EnvironmentListCommand extends CommandBase
         }
 
         if ($input->getOption('sort')) {
-            $this->api()->sortResources($environments, $input->getOption('sort'));
+            $this->api->sortResources($environments, $input->getOption('sort'));
         }
         if ($input->getOption('reverse')) {
             $environments = array_reverse($environments, true);
@@ -158,13 +186,11 @@ class EnvironmentListCommand extends CommandBase
             return;
         }
 
-        $project = $this->getSelectedProject();
-        $this->currentEnvironment = $this->getCurrentEnvironment($project);
+        $project = $selection->getProject();
+        $this->currentEnvironment = $this->selector->getCurrentEnvironment($project);
 
-        if (($currentProject = $this->getCurrentProject()) && $currentProject == $project) {
-            /** @var \Platformsh\Cli\Local\LocalProject $localProject */
-            $localProject = $this->getService('local.project');
-            $projectConfig = $localProject->getProjectConfig($this->getProjectRoot());
+        if (($currentProject = $this->selector->getCurrentProject()) && $currentProject == $project) {
+            $projectConfig = $this->localProject->getProjectConfig($this->selector->getProjectRoot());
             if (isset($projectConfig['mapping'])) {
                 $this->mapping = $projectConfig['mapping'];
             }
@@ -182,21 +208,15 @@ class EnvironmentListCommand extends CommandBase
         $headers = ['ID', 'Title', 'Status', 'Created', 'Updated'];
         $defaultColumns = ['id', 'title', 'status'];
 
-        /** @var \Platformsh\Cli\Service\Table $table */
-        $table = $this->getService('table');
-
-        /** @var \Platformsh\Cli\Service\PropertyFormatter $formatter */
-        $this->formatter = $this->getService('property_formatter');
-
-        if ($table->formatIsMachineReadable()) {
-            $table->render($this->buildEnvironmentRows($tree, false, false), $headers, $defaultColumns);
+        if ($this->table->formatIsMachineReadable()) {
+            $this->table->render($this->buildEnvironmentRows($tree, false, false), $headers, $defaultColumns);
 
             return;
         }
 
         $this->stdErr->writeln("Your environments are: ");
 
-        $table->render($this->buildEnvironmentRows($tree), $headers, $defaultColumns);
+        $this->table->render($this->buildEnvironmentRows($tree), $headers, $defaultColumns);
 
         if (!$this->currentEnvironment) {
             return;
@@ -205,7 +225,7 @@ class EnvironmentListCommand extends CommandBase
         $this->stdErr->writeln("<info>*</info> - Indicates the current environment\n");
 
         $currentEnvironment = $this->currentEnvironment;
-        $executable = $this->config()->get('application.executable');
+        $executable = $this->config->get('application.executable');
 
         $this->stdErr->writeln(
             'Check out a different environment by running <info>' . $executable . ' checkout [id]</info>'

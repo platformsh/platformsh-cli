@@ -1,42 +1,68 @@
 <?php
+declare(strict_types=1);
 
-namespace Platformsh\Cli\Command\Variable;
+namespace Platformsh\Cli\Service;
 
-use Platformsh\Cli\Command\CommandBase;
 use Platformsh\Cli\Console\AdaptiveTableCell;
+use Platformsh\Cli\Console\Selection;
 use Platformsh\Client\Model\ProjectLevelVariable;
-use Platformsh\Client\Model\Resource as ApiResource;
+use Platformsh\Client\Model\ApiResourceBase;
 use Platformsh\Client\Model\Variable as EnvironmentLevelVariable;
 use Platformsh\ConsoleForm\Field\BooleanField;
 use Platformsh\ConsoleForm\Field\Field;
 use Platformsh\ConsoleForm\Field\OptionsField;
 use Symfony\Component\Console\Exception\InvalidArgumentException;
 use Symfony\Component\Console\Input\ArgvInput;
+use Symfony\Component\Console\Input\InputDefinition;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
+use Symfony\Component\Console\Output\ConsoleOutputInterface;
 use Symfony\Component\Console\Output\NullOutput;
+use Symfony\Component\Console\Output\OutputInterface;
 
-abstract class VariableCommandBase extends CommandBase
+class VariableService
 {
     const LEVEL_PROJECT = 'project';
     const LEVEL_ENVIRONMENT = 'environment';
+
+    private $api;
+    private $config;
+    private $formatter;
+    private $stdErr;
+    private $table;
+
+    public function __construct(
+        Api $api,
+        Config $config,
+        OutputInterface $output,
+        PropertyFormatter $formatter,
+        Table $table
+    ) {
+        $this->api = $api;
+        $this->config = $config;
+        $this->formatter = $formatter;
+        $this->stdErr = $output instanceof ConsoleOutputInterface ? $output->getErrorOutput() : $output;
+        $this->table = $table;
+    }
 
     /**
      * @param string $str
      *
      * @return string
      */
-    protected function escapeShellArg($str)
+    public function escapeShellArg($str)
     {
         return (new ArgvInput(['example']))->escapeToken($str);
     }
 
     /**
      * Add the --level option.
+     *
+     * @param \Symfony\Component\Console\Input\InputDefinition $definition
      */
-    protected function addLevelOption()
+    public function addLevelOption(InputDefinition $definition)
     {
-        $this->addOption('level', 'l', InputOption::VALUE_REQUIRED, "The variable level ('project', 'environment', 'p' or 'e')");
+        $definition->addOption(new InputOption('level', 'l', InputOption::VALUE_REQUIRED, "The variable level ('project', 'environment', 'p' or 'e')"));
     }
 
     /**
@@ -46,7 +72,7 @@ abstract class VariableCommandBase extends CommandBase
      *
      * @return string|null
      */
-    protected function getRequestedLevel(InputInterface $input)
+    public function getRequestedLevel(InputInterface $input)
     {
         $str = $input->getOption('level');
         if (empty($str)) {
@@ -63,6 +89,7 @@ abstract class VariableCommandBase extends CommandBase
     /**
      * Finds an existing variable by name.
      *
+     * @param Selection   $selection
      * @param string      $name
      * @param string|null $level
      * @param bool        $messages Whether to print error messages to
@@ -70,14 +97,14 @@ abstract class VariableCommandBase extends CommandBase
      *
      * @return \Platformsh\Client\Model\ProjectLevelVariable|\Platformsh\Client\Model\Variable|false
      */
-    protected function getExistingVariable($name, $level = null, $messages = true)
+    public function getExistingVariable(Selection $selection, $name, $level = null, $messages = true)
     {
         $output = $messages ? $this->stdErr : new NullOutput();
 
-        if ($level === self::LEVEL_ENVIRONMENT || ($this->hasSelectedEnvironment() && $level === null)) {
-            $variable = $this->getSelectedEnvironment()->getVariable($name);
+        if ($level === self::LEVEL_ENVIRONMENT || ($selection->hasEnvironment() && $level === null)) {
+            $variable = $selection->getEnvironment()->getVariable($name);
             if ($variable !== false) {
-                if ($level === null && $this->getSelectedProject()->getVariable($name)) {
+                if ($level === null && $selection->getProject()->getVariable($name)) {
                     $output->writeln('Variable found at both project and environment levels: <error>' . $name . '</error>');
                     $output->writeln("To select a variable, use the --level option ('" . self::LEVEL_PROJECT . "' or '" . self::LEVEL_ENVIRONMENT . "').");
 
@@ -88,7 +115,7 @@ abstract class VariableCommandBase extends CommandBase
             }
         }
         if ($level !== self::LEVEL_ENVIRONMENT) {
-            $variable = $this->getSelectedProject()->getVariable($name);
+            $variable = $selection->getProject()->getVariable($name);
             if ($variable !== false) {
                 return $variable;
             }
@@ -101,15 +128,10 @@ abstract class VariableCommandBase extends CommandBase
     /**
      * Display a variable to stdout.
      *
-     * @param \Platformsh\Client\Model\Resource $variable
+     * @param \Platformsh\Client\Model\ApiResourceBase $variable
      */
-    protected function displayVariable(ApiResource $variable)
+    public function displayVariable(ApiResourceBase $variable)
     {
-        /** @var \Platformsh\Cli\Service\Table $table */
-        $table = $this->getService('table');
-        /** @var \Platformsh\Cli\Service\PropertyFormatter $formatter */
-        $formatter = $this->getService('property_formatter');
-
         $properties = $variable->getProperties();
         $properties['level'] = $this->getVariableLevel($variable);
 
@@ -120,17 +142,17 @@ abstract class VariableCommandBase extends CommandBase
             if ($key === 'value') {
                 $value = wordwrap($value, 80, "\n", true);
             }
-            $values[] = $formatter->format($value, $key);
+            $values[] = $this->formatter->format($value, $key);
         }
-        $table->renderSimple($values, $headings);
+        $this->table->renderSimple($values, $headings);
     }
 
     /**
-     * @param ApiResource $variable
+     * @param ApiResourceBase $variable
      *
      * @return string
      */
-    protected function getVariableLevel(ApiResource $variable)
+    public function getVariableLevel(ApiResourceBase $variable)
     {
         if ($variable instanceof EnvironmentLevelVariable) {
             return self::LEVEL_ENVIRONMENT;
@@ -143,7 +165,7 @@ abstract class VariableCommandBase extends CommandBase
     /**
      * @return Field[]
      */
-    protected function getFields()
+    public function getFields()
     {
         $fields = [];
 
@@ -170,9 +192,6 @@ abstract class VariableCommandBase extends CommandBase
             ],
             'optionName' => false,
             'questionLine' => 'On what environment should the variable be set?',
-            'optionsCallback' => function () {
-                return array_keys($this->api()->getEnvironments($this->getSelectedProject()));
-            },
             'asChoice' => false,
             'includeAsOption' => false,
         ]);
@@ -261,7 +280,7 @@ abstract class VariableCommandBase extends CommandBase
     private function getPrefixOptions($name)
     {
         return [
-            'none' => 'No prefix: The variable will be part of <comment>$' . $this->config()->get('service.env_prefix') . 'VARIABLES</comment>.',
+            'none' => 'No prefix: The variable will be part of <comment>$' . $this->config->get('service.env_prefix') . 'VARIABLES</comment>.',
             'env:' => 'env: The variable will be exposed directly, e.g. as <comment>$' . strtoupper($name) . '</comment>.',
         ];
     }

@@ -2,18 +2,20 @@
 
 namespace Platformsh\Cli\Tests\Command;
 
+use PHPUnit\Framework\TestCase;
 use Platformsh\Cli\Command\DecodeCommand;
+use Platformsh\Cli\Service\Config;
 use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Output\BufferedOutput;
 
 /**
  * @group commands
  */
-class DecodeTest extends \PHPUnit_Framework_TestCase
+class DecodeTest extends TestCase
 {
     private function runCommand(array $args) {
         $output = new BufferedOutput();
-        (new DecodeCommand())
+        (new DecodeCommand(new Config()))
             ->run(new ArrayInput($args), $output);
 
         return $output->fetch();

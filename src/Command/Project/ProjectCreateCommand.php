@@ -1,10 +1,14 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Command\Project;
 
 use GuzzleHttp\Exception\ConnectException;
 use Platformsh\Cli\Command\CommandBase;
 use Platformsh\Cli\Console\Bot;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\QuestionHelper;
 use Platformsh\ConsoleForm\Field\Field;
 use Platformsh\ConsoleForm\Field\OptionsField;
 use Platformsh\ConsoleForm\Form;
@@ -17,14 +21,29 @@ class ProjectCreateCommand extends CommandBase
     /** @var Form */
     protected $form;
 
+    protected static $defaultName = 'project:create';
+
+    private $api;
+    private $config;
+    private $questionHelper;
+
+    public function __construct(
+        Api $api,
+        Config $config,
+        QuestionHelper $questionHelper
+    ) {
+        $this->api = $api;
+        $this->config = $config;
+        $this->questionHelper = $questionHelper;
+        parent::__construct();
+    }
+
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-          ->setName('project:create')
-          ->setAliases(['create'])
+        $this->setAliases(['create'])
           ->setDescription('Create a new project');
 
         $this->form = Form::fromArray($this->getFields());
@@ -55,30 +74,27 @@ EOF
      */
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-        $questionHelper = $this->getService('question_helper');
+        $options = $this->form->resolveOptions($input, $output, $this->questionHelper);
 
-        $options = $this->form->resolveOptions($input, $output, $questionHelper);
-
-        $estimate = $this->api()
+        $estimate = $this->api
             ->getClient()
             ->getSubscriptionEstimate($options['plan'], $options['storage'], $options['environments'], 1);
         $costConfirm = sprintf(
             'The estimated monthly cost of this project is: <comment>%s</comment>',
             $estimate['total']
         );
-        if ($this->config()->has('service.pricing_url')) {
+        if ($this->config->has('service.pricing_url')) {
             $costConfirm .= sprintf(
                 "\nPricing information: <comment>%s</comment>",
-                $this->config()->get('service.pricing_url')
+                $this->config->get('service.pricing_url')
             );
         }
         $costConfirm .= "\n\nAre you sure you want to continue?";
-        if (!$questionHelper->confirm($costConfirm)) {
+        if (!$this->questionHelper->confirm($costConfirm)) {
             return 1;
         }
 
-        $subscription = $this->api()->getClient()
+        $subscription = $this->api->getClient()
             ->createSubscription(
                 $options['region'],
                 $options['plan'],
@@ -87,17 +103,17 @@ EOF
                 $options['environments']
             );
 
-        $this->api()->clearProjectsCache();
+        $this->api->clearProjectsCache();
 
         $this->stdErr->writeln(sprintf(
             'Your %s project has been requested (subscription ID: <comment>%s</comment>)',
-            $this->config()->get('service.name'),
+            $this->config->get('service.name'),
             $subscription->id
         ));
 
         $this->stdErr->writeln(sprintf(
             "\nThe %s Bot is activating your project\n",
-            $this->config()->get('service.name')
+            $this->config->get('service.name')
         ));
 
         $bot = new Bot($this->stdErr);
@@ -141,7 +157,7 @@ EOF
                 $output->writeln($subscription->project_id);
             }
 
-            $this->stdErr->writeln(sprintf('View your active projects with: <info>%s project:list</info>', $this->config()->get('application.executable')));
+            $this->stdErr->writeln(sprintf('View your active projects with: <info>%s project:list</info>', $this->config->get('application.executable')));
 
             return 1;
         }
@@ -175,11 +191,11 @@ EOF
         }
 
         if (!$runtime) {
-            return (array) $this->config()->get('service.available_plans');
+            return (array) $this->config->get('service.available_plans');
         }
 
         $plans = [];
-        foreach ($this->api()->getClient()->getPlans() as $plan) {
+        foreach ($this->api->getClient()->getPlans() as $plan) {
             if ($plan->hasProperty('price', false)) {
                 $plans[$plan->name] = sprintf('%s (%s)', $plan->label, $plan->price->__toString());
             } else {
@@ -204,13 +220,13 @@ EOF
     {
         if ($runtime) {
             $regions = [];
-            foreach ($this->api()->getClient()->getRegions() as $region) {
+            foreach ($this->api->getClient()->getRegions() as $region) {
                 if ($region->available) {
                     $regions[$region->id] = $region->label;
                 }
             }
         } else {
-            $regions = (array) $this->config()->get('service.available_regions');
+            $regions = (array) $this->config->get('service.available_regions');
         }
 
         return $regions;

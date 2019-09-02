@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 /**
  * @file
  * Override Symfony Console's HelpCommand to customize the appearance of help.
@@ -17,6 +18,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class HelpCommand extends ParentHelpCommand
 {
+    protected static $defaultName = 'help';
 
     protected $command;
 
@@ -51,5 +53,7 @@ class HelpCommand extends ParentHelpCommand
                 'raw_text' => $input->getOption('raw'),
             ]
         );
+
+        $this->command = null;
     }
 }

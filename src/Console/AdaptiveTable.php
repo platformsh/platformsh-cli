@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Console;
 
@@ -121,8 +122,20 @@ class AdaptiveTable extends Table
             }
             foreach ($row as $column => &$cell) {
                 $cellWidth = $this->getCellWidth($cell);
-                if ($cellWidth > $maxColumnWidths[$column]) {
-                    $cell = $this->wrapCell($cell, $maxColumnWidths[$column]);
+                if ($cellWidth <= $maxColumnWidths[$column]) {
+                    continue;
+                }
+                $contents = $cell instanceof TableCell ? $cell->__toString() : $cell;
+                $wrapped = $this->wrapCell($contents, $maxColumnWidths[$column]);
+                if ($cell instanceof TableCell) {
+                    $cell = new TableCell($wrapped, [
+                        'colspan' => $cell->getColspan(),
+                        'rowspan' => $cell->getRowspan(),
+                    ]);
+                } elseif ($cell instanceof AdaptiveTableCell) {
+                    $cell = $cell->withValue($wrapped);
+                } elseif (is_string($cell)) {
+                    $cell = $wrapped;
                 }
             }
         }
@@ -138,7 +151,7 @@ class AdaptiveTable extends Table
      *
      * @return string
      */
-    protected function wrapCell($contents, $width)
+    protected function wrapCell(string $contents, int $width)
     {
         // Account for left-indented cells.
         if (strpos($contents, ' ') === 0) {
@@ -159,7 +172,7 @@ class AdaptiveTable extends Table
      *
      * @return string
      */
-    public function wrapWithDecoration($formattedText, $maxLength)
+    public function wrapWithDecoration(string $formattedText, int $maxLength)
     {
         $plainText = Helper::removeDecoration($this->outputCopy->getFormatter(), $formattedText);
         if ($plainText === $formattedText) {
@@ -247,7 +260,7 @@ class AdaptiveTable extends Table
      *   An array of the maximum column widths that fit into the table width,
      *   keyed by the column number.
      */
-    protected function getMaxColumnWidths()
+    protected function getMaxColumnWidths(): array
     {
         // Loop through the table rows and headers, building multidimensional
         // arrays of the 'original' and 'minimum' column widths. In the same
@@ -300,7 +313,7 @@ class AdaptiveTable extends Table
         asort($originalColumnWidths, SORT_NUMERIC);
         foreach ($originalColumnWidths as $column => $columnWidth) {
             $columnRatio = ($maxContentWidth / $totalWidth) * $columnWidth;
-            $maxColumnWidth = round($columnRatio);
+            $maxColumnWidth = (int) round($columnRatio);
 
             // Do not change the width of columns which are already narrower
             // than the minimum.
@@ -325,7 +338,7 @@ class AdaptiveTable extends Table
      * @return int
      *   The maximum table width, minus the width taken up by decoration.
      */
-    protected function getMaxContentWidth($columnCount)
+    protected function getMaxContentWidth(int $columnCount): int
     {
         $style = $this->getStyle();
         $verticalBorderQuantity = $columnCount + 1;
@@ -349,7 +362,7 @@ class AdaptiveTable extends Table
     private function getCellWidth($cell)
     {
         $lineWidths = [0];
-        foreach (explode(PHP_EOL, $cell) as $line) {
+        foreach (explode(PHP_EOL, (string) $cell) as $line) {
             $lineWidths[] = Helper::strlenWithoutDecoration($this->outputCopy->getFormatter(), $line);
         }
         $cellWidth = max($lineWidths);

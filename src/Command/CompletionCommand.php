@@ -1,33 +1,33 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Command;
 
 use Platformsh\Cli\Service\Api;
 use Platformsh\Cli\Local\LocalApplication;
+use Platformsh\Cli\Service\Selector;
 use Stecman\Component\Symfony\Console\BashCompletion\Completion;
 use Stecman\Component\Symfony\Console\BashCompletion\CompletionCommand as ParentCompletionCommand;
 
 class CompletionCommand extends ParentCompletionCommand
 {
+    protected static $defaultName = '_completion';
 
-    /** @var Api */
-    protected $api;
+    private $api;
+    private $selector;
 
     /**
      * A list of the user's projects.
      * @var array
      */
-    protected $projects = [];
+    private $projects = [];
 
-    /** @var CommandBase|null */
-    private $welcomeCommand;
-
-    /**
-     * {@inheritdoc}
-     */
-    public function isHidden()
+    public function __construct(Selector $selector, Api $api)
     {
-        return true;
+        $this->api = $api;
+        $this->selector = $selector;
+        $this->setHidden(true);
+        parent::__construct();
     }
 
     /**
@@ -35,7 +35,6 @@ class CompletionCommand extends ParentCompletionCommand
      */
     protected function runCompletion()
     {
-        $this->api = new Api();
         $this->projects = $this->api->isLoggedIn() ? $this->api->getProjects(false) : [];
         $projectIds = array_keys($this->projects);
 
@@ -179,31 +178,18 @@ class CompletionCommand extends ParentCompletionCommand
     }
 
     /**
-     * @return WelcomeCommand
-     */
-    protected function getWelcomeCommand()
-    {
-        if (!isset($this->welcomeCommand)) {
-            $this->welcomeCommand = new WelcomeCommand('welcome');
-            $this->welcomeCommand->setApplication($this->getApplication());
-        }
-
-        return $this->welcomeCommand;
-    }
-
-    /**
      * Get a list of environments IDs that can be checked out.
      *
      * @return string[]
      */
     public function getEnvironmentsForCheckout()
     {
-        $project = $this->getWelcomeCommand()->getCurrentProject();
+        $project = $this->selector->getCurrentProject();
         if (!$project) {
             return [];
         }
         try {
-            $currentEnvironment = $this->getWelcomeCommand()->getCurrentEnvironment($project, false);
+            $currentEnvironment = $this->selector->getCurrentEnvironment($project, false);
         } catch (\Exception $e) {
             $currentEnvironment = false;
         }
@@ -228,7 +214,7 @@ class CompletionCommand extends ParentCompletionCommand
     public function getAppNames()
     {
         $apps = [];
-        if ($projectRoot = $this->getWelcomeCommand()->getProjectRoot()) {
+        if ($projectRoot = $this->selector->getProjectRoot()) {
             foreach (LocalApplication::getApplications($projectRoot) as $app) {
                 $name = $app->getName();
                 if ($name !== null) {
@@ -262,7 +248,7 @@ class CompletionCommand extends ParentCompletionCommand
         $commandLine = $this->handler->getContext()
             ->getCommandLine();
         $currentProjectId = $this->getProjectIdFromCommandLine($commandLine);
-        if (!$currentProjectId && ($currentProject = $this->getWelcomeCommand()->getCurrentProject())) {
+        if (!$currentProjectId && ($currentProject = $this->selector->getCurrentProject())) {
             return $currentProject;
         } elseif (isset($this->projects[$currentProjectId])) {
             return $this->projects[$currentProjectId];

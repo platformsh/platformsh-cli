@@ -1,10 +1,13 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Command\Service;
 
 use Platformsh\Cli\Command\CommandBase;
 use Platformsh\Cli\Model\Host\RemoteHost;
 use Platformsh\Cli\Service\Relationships;
+use Platformsh\Cli\Service\Selector;
+use Platformsh\Cli\Service\Shell;
 use Platformsh\Cli\Service\Ssh;
 use Platformsh\Cli\Util\OsUtil;
 use Symfony\Component\Console\Input\InputArgument;
@@ -13,17 +16,37 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class RedisCliCommand extends CommandBase
 {
+    protected static $defaultName = 'service:redis-cli';
+
+    private $relationships;
+    private $selector;
+    private $shell;
+    private $ssh;
+
+    public function __construct(
+        Relationships $relationships,
+        Selector $selector,
+        Shell $shell,
+        Ssh $ssh
+    ) {
+        $this->relationships = $relationships;
+        $this->selector = $selector;
+        $this->shell = $shell;
+        $this->ssh = $ssh;
+        parent::__construct();
+    }
+
     protected function configure()
     {
-        $this->setName('service:redis-cli');
         $this->setAliases(['redis']);
         $this->setDescription('Access the Redis CLI');
         $this->addArgument('args', InputArgument::OPTIONAL, 'Arguments to add to the Redis command');
-        Relationships::configureInput($this->getDefinition());
-        Ssh::configureInput($this->getDefinition());
-        $this->addProjectOption()
-            ->addEnvironmentOption()
-            ->addAppOption();
+
+        $definition = $this->getDefinition();
+        $this->relationships->configureInput($definition);
+        $this->ssh->configureInput($definition);
+        $this->selector->addAllOptions($definition);
+
         $this->addExample('Open the redis-cli shell');
         $this->addExample('Ping the Redis server', 'ping');
         $this->addExample('Show Redis status information', 'info');
@@ -37,11 +60,10 @@ class RedisCliCommand extends CommandBase
             throw new \RuntimeException('The redis-cli command cannot run as a shell via multi');
         }
 
-        /** @var \Platformsh\Cli\Service\Relationships $relationshipsService */
-        $relationshipsService = $this->getService('relationships');
-        $host = $this->selectHost($input, $relationshipsService->hasLocalEnvVar());
+        $selection = $this->selector->getSelection($input, false, $this->relationships->hasLocalEnvVar());
+        $host = $selection->getHost();
 
-        $service = $relationshipsService->chooseService($host, $input, $output, ['redis']);
+        $service = $this->relationships->chooseService($host, $input, $output, ['redis']);
         if (!$service) {
             return 1;
         }

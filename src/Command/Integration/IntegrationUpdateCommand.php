@@ -1,25 +1,56 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Integration;
 
+use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\ActivityService;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\IntegrationService;
+use Platformsh\Cli\Service\Selector;
 use GuzzleHttp\Exception\BadResponseException;
 use Platformsh\Cli\Util\NestedArrayUtil;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
-class IntegrationUpdateCommand extends IntegrationCommandBase
+class IntegrationUpdateCommand extends CommandBase
 {
+    protected static $defaultName = 'integration:update';
+
+    private $activityService;
+    private $api;
+    private $integrationService;
+    private $selector;
+
+    public function __construct(
+        ActivityService $activityService,
+        Api $api,
+        IntegrationService $integration,
+        Selector $selector
+    ) {
+        $this->api = $api;
+        $this->activityService = $activityService;
+        $this->integrationService = $integration;
+        $this->selector = $selector;
+        parent::__construct();
+    }
+
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('integration:update')
-            ->addArgument('id', InputArgument::REQUIRED, 'The ID of the integration to update')
+        $this->addArgument('id', InputArgument::REQUIRED, 'The ID of the integration to update')
             ->setDescription('Update an integration');
-        $this->getForm()->configureInputDefinition($this->getDefinition());
-        $this->addProjectOption()->addWaitOptions();
+
+        $definition = $this->getDefinition();
+        $form = $this->integrationService->getForm();
+        $form->getField('type')->set('includeAsOption', false);
+        $this->integrationService->getForm()->configureInputDefinition($definition);
+        $this->selector->addProjectOption($definition);
+        $this->activityService->configureInput($definition);
+
         $this->addExample(
             'Switch on the "fetch branches" option for a specific integration',
             'ZXhhbXBsZSB --fetch-branches 1'
@@ -28,28 +59,23 @@ class IntegrationUpdateCommand extends IntegrationCommandBase
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->warnAboutDeprecatedOptions(
-            ['type'],
-            'The option --%s is deprecated and will be removed in a future version.'
-        );
-
-        $this->validateInput($input);
+        $project = $this->selector->getSelection($input)->getProject();
 
         $id = $input->getArgument('id');
-        $project = $this->getSelectedProject();
         $integration = $project->getIntegration($id);
         if (!$integration) {
             try {
-                $integration = $this->api()->matchPartialId($id, $project->getIntegrations(), 'Integration');
+                $integration = $this->api->matchPartialId($id, $project->getIntegrations(), 'Integration');
             } catch (\InvalidArgumentException $e) {
                 $this->stdErr->writeln($e->getMessage());
                 return 1;
             }
         }
 
-        // Get the values supplied via the command-line options.
+        $form = $this->integrationService->getForm();
         $newValues = [];
-        foreach ($this->getForm()->getFields() as $key => $field) {
+        foreach ($form->getFields() as $key => $field) {
+            // Get the values supplied via the command-line options.
             $value = $field->getValueFromInput($input);
             $parents = $field->getValueKeys() ?: [$key];
             if ($value !== null) {
@@ -57,7 +83,7 @@ class IntegrationUpdateCommand extends IntegrationCommandBase
             }
         }
 
-        $this->postProcessValues($newValues, $integration);
+        $this->integrationService->postProcessValues($newValues, $integration);
 
         // Merge current values with new values, accounting for nested arrays.
         foreach ($integration->getProperties() as $key => $currentValue) {
@@ -78,8 +104,9 @@ class IntegrationUpdateCommand extends IntegrationCommandBase
 
         if (!$newValues) {
             $this->stdErr->writeln('No changed values were provided to update.');
+
             $this->stdErr->writeln('');
-            $this->ensureHooks($integration);
+            $this->integrationService->ensureHooks($integration, $project);
 
             return 1;
         }
@@ -95,7 +122,7 @@ class IntegrationUpdateCommand extends IntegrationCommandBase
                     $integration->type
                 ));
                 $this->stdErr->writeln('');
-                $this->listValidationErrors($errors, $output);
+                $this->integrationService->listValidationErrors($errors, $output);
 
                 return 4;
             }
@@ -104,14 +131,12 @@ class IntegrationUpdateCommand extends IntegrationCommandBase
         }
 
         $this->stdErr->writeln("Integration <info>{$integration->id}</info> (<info>{$integration->type}</info>) updated");
-        $this->ensureHooks($integration);
+        $this->integrationService->ensureHooks($integration, $project);
 
-        $this->displayIntegration($integration);
+        $this->integrationService->displayIntegration($integration);
 
-        if ($this->shouldWait($input)) {
-            /** @var \Platformsh\Cli\Service\ActivityMonitor $activityMonitor */
-            $activityMonitor = $this->getService('activity_monitor');
-            $activityMonitor->waitMultiple($result->getActivities(), $this->getSelectedProject());
+        if ($this->activityService->shouldWait($input)) {
+            $this->activityService->waitMultiple($result->getActivities(), $project);
         }
 
         return 0;

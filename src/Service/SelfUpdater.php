@@ -1,4 +1,6 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Service;
 
 use Humbug\SelfUpdate\Updater;

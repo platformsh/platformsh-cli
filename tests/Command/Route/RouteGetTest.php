@@ -2,17 +2,18 @@
 
 namespace Platformsh\Cli\Tests\Command\Route;
 
-use Platformsh\Cli\Command\Route\RouteGetCommand;
-use Symfony\Component\Console\Input\ArrayInput;
-use Symfony\Component\Console\Output\BufferedOutput;
+use PHPUnit\Framework\TestCase;
+use Platformsh\Cli\Tests\CommandRunner;
 
 /**
  * @group commands
  */
-class RouteGetTest extends \PHPUnit_Framework_TestCase
+class RouteGetTest extends TestCase
 {
+    private $mockRoutes;
+
     public function setUp() {
-        $mockRoutes = base64_encode(json_encode([
+        $this->mockRoutes = base64_encode(json_encode([
             'https://example.com' => [
                 'primary' => true,
                 'type' => 'upstream',
@@ -25,27 +26,20 @@ class RouteGetTest extends \PHPUnit_Framework_TestCase
                 'original_url' => 'http://{default}',
             ],
         ]));
-        putenv('PLATFORM_ROUTES=' . $mockRoutes);
     }
 
-    public function tearDown() {
-        putenv('PLATFORM_ROUTES=');
-    }
-
-    private function runCommand(array $args) {
-        $output = new BufferedOutput();
-        (new RouteGetCommand())
-            ->run(new ArrayInput($args), $output);
-
-        return $output->fetch();
+    private function runCommand(array $args): string {
+        return (new CommandRunner())
+            ->run('route:get', $args, ['PLATFORM_ROUTES' => $this->mockRoutes])
+            ->getOutput();
     }
 
     public function testGetPrimaryRouteUrl() {
         $this->assertEquals(
             'https://example.com',
             rtrim($this->runCommand([
-                '--primary' => true,
-                '--property' => 'url',
+                '--primary',
+                '--property', 'url',
             ]), "\n")
         );
     }
@@ -54,15 +48,15 @@ class RouteGetTest extends \PHPUnit_Framework_TestCase
         $this->assertEquals(
             'false',
             rtrim($this->runCommand([
-                'route' => 'http://{default}',
-                '--property' => 'primary',
+                'http://{default}',
+                '--property', 'primary',
             ]), "\n")
         );
         $this->assertEquals(
             'true',
             rtrim($this->runCommand([
-                'route' => 'https://{default}',
-                '--property' => 'primary',
+                'https://{default}',
+                '--property', 'primary',
             ]), "\n")
         );
     }

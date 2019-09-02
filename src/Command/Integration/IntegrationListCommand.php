@@ -1,41 +1,60 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Integration;
 
+use Platformsh\Cli\Command\CommandBase;
 use Platformsh\Cli\Console\AdaptiveTableCell;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\Selector;
 use Platformsh\Cli\Service\Table;
 use Platformsh\Client\Model\Integration;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
-class IntegrationListCommand extends IntegrationCommandBase
+class IntegrationListCommand extends CommandBase
 {
+    protected static $defaultName = 'integration:list';
+
+    private $config;
+    private $selector;
+    private $table;
+
+    public function __construct(
+        Config $config,
+        Selector $selector,
+        Table $table
+    ) {
+        $this->config = $config;
+        $this->selector = $selector;
+        $this->table = $table;
+        parent::__construct();
+    }
+
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('integration:list')
-            ->setAliases(['integrations'])
+        $this->setAliases(['integrations'])
             ->setDescription('View a list of project integration(s)');
-        Table::configureInput($this->getDefinition());
-        $this->addProjectOption();
+
+        $definition = $this->getDefinition();
+        $this->selector->addProjectOption($definition);
+        $this->table->configureInput($definition);
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
+        $project = $this->selector->getSelection($input)->getProject();
 
-        $integrations = $this->getSelectedProject()
-                        ->getIntegrations();
+        $integrations = $project->getIntegrations();
         if (!$integrations) {
             $this->stdErr->writeln('No integrations found');
 
             return 1;
         }
 
-        /** @var \Platformsh\Cli\Service\Table $table */
-        $table = $this->getService('table');
         $header = ['ID', 'Type', 'Summary'];
         $rows = [];
 
@@ -47,9 +66,9 @@ class IntegrationListCommand extends IntegrationCommandBase
             ];
         }
 
-        $table->render($rows, $header);
+        $this->table->render($rows, $header);
 
-        $executable = $this->config()->get('application.executable');
+        $executable = $this->config->get('application.executable');
         $this->stdErr->writeln('');
         $this->stdErr->writeln('View integration details with: <info>' . $executable . ' integration:get [id]</info>');
         $this->stdErr->writeln('');

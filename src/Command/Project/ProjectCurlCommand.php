@@ -1,7 +1,11 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Project;
 
 use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\Selector;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -9,13 +13,20 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class ProjectCurlCommand extends CommandBase
 {
-    protected $hiddenInList = true;
+    protected static $defaultName = 'project:curl';
+
+    private $api;
+    private $selector;
+
+    public function __construct(Api $api, Selector $selector) {
+        $this->api = $api;
+        $this->selector = $selector;
+        parent::__construct();
+    }
 
     protected function configure()
     {
-        $this
-            ->setName('project:curl')
-            ->setDescription("Run a cURL request on a project's API")
+        $this->setDescription("Run a cURL request on a project's API")
             ->addArgument('path', InputArgument::OPTIONAL, 'The API path')
             ->addOption('request', 'X', InputOption::VALUE_REQUIRED, 'The request method to use')
             ->addOption('data', 'd', InputOption::VALUE_REQUIRED, 'Data to send')
@@ -23,15 +34,16 @@ class ProjectCurlCommand extends CommandBase
             ->addOption('head', 'I', InputOption::VALUE_NONE, 'Fetch headers only')
             ->addOption('disable-compression', null, InputOption::VALUE_NONE, 'Do not use the curl --compressed flag')
             ->addOption('header', 'H', InputOption::VALUE_REQUIRED | InputOption::VALUE_IS_ARRAY, 'Extra header(s)');
-        $this->addProjectOption();
+        $this->setHidden(true);
+        $this->selector->addProjectOption($this->getDefinition());
         $this->addExample('Change the project title', '-X PATCH -d \'{"title": "New title"}\'');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
+        $project = $this->selector->getSelection($input)->getProject();
 
-        $url = $this->getSelectedProject()->getUri();
+        $url = $project->getUri();
 
         if ($path = $input->getArgument('path')) {
             if (parse_url($path, PHP_URL_HOST)) {
@@ -42,7 +54,7 @@ class ProjectCurlCommand extends CommandBase
             $url .= '/' . ltrim($path, '/');
         }
 
-        $token = $this->api()->getAccessToken();
+        $token = $this->api->getAccessToken();
         $commandline = sprintf(
             'curl -H %s %s',
             escapeshellarg('Authorization: Bearer ' . $token),

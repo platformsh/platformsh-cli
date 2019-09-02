@@ -1,9 +1,10 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Exception;
 
-use GuzzleHttp\Message\RequestInterface;
-use GuzzleHttp\Message\ResponseInterface;
+use Psr\Http\Message\RequestInterface;
+use Psr\Http\Message\ResponseInterface;
 use Platformsh\Client\Exception\ApiResponseException;
 
 class HttpException extends \RuntimeException
@@ -19,7 +20,7 @@ class HttpException extends \RuntimeException
     {
         $message = $message ?: $this->message;
         if ($request !== null && $response !== null) {
-            $details = "[url] " . $request->getUrl();
+            $details = "[url] " . $request->getUri();
             $details .= " [status code] " . $response->getStatusCode();
             $details .= " [reason phrase] " . $response->getReasonPhrase();
             $details .= ApiResponseException::getErrorDetails($response);

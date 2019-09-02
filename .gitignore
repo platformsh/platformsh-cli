@@ -3,3 +3,4 @@
 /*.phar
 .idea/
 /release-changelog.md
+/config/cache

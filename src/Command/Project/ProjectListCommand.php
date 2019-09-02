@@ -1,8 +1,12 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Project;
 
 use Platformsh\Cli\Command\CommandBase;
 use Platformsh\Cli\Console\AdaptiveTableCell;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\Config;
 use Platformsh\Cli\Service\Table;
 use Platformsh\Client\Model\Project;
 use Symfony\Component\Console\Input\InputInterface;
@@ -11,12 +15,26 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class ProjectListCommand extends CommandBase
 {
+    protected static $defaultName = 'project:list';
+
+    private $api;
+    private $config;
+    private $table;
+
+    public function __construct(
+        Api $api,
+        Config $config,
+        Table $table
+    ) {
+        $this->api = $api;
+        $this->config = $config;
+        $this->table = $table;
+        parent::__construct();
+    }
 
     protected function configure()
     {
-        $this
-            ->setName('project:list')
-            ->setAliases(['projects', 'pro'])
+        $this->setAliases(['projects', 'pro'])
             ->setDescription('Get a list of all active projects')
             ->addOption('pipe', null, InputOption::VALUE_NONE, 'Output a simple list of project IDs')
             ->addOption('host', null, InputOption::VALUE_REQUIRED, 'Filter by region hostname (exact match)')
@@ -25,7 +43,7 @@ class ProjectListCommand extends CommandBase
             ->addOption('refresh', null, InputOption::VALUE_REQUIRED, 'Whether to refresh the list', 1)
             ->addOption('sort', null, InputOption::VALUE_REQUIRED, 'A property to sort by', 'title')
             ->addOption('reverse', null, InputOption::VALUE_NONE, 'Sort in reverse (descending) order');
-        Table::configureInput($this->getDefinition());
+        $this->table->configureInput($this->getDefinition());
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
@@ -33,7 +51,7 @@ class ProjectListCommand extends CommandBase
         $refresh = $input->hasOption('refresh') && $input->getOption('refresh');
 
         // Fetch the list of projects.
-        $projects = $this->api()->getProjects($refresh ? true : null);
+        $projects = $this->api->getProjects($refresh ? true : null);
 
         // Filter the list of projects.
         $filters = [];
@@ -50,7 +68,7 @@ class ProjectListCommand extends CommandBase
 
         // Sort the list of projects.
         if ($input->getOption('sort')) {
-            $this->api()->sortResources($projects, $input->getOption('sort'));
+            $this->api->sortResources($projects, $input->getOption('sort'));
         }
         if ($input->getOption('reverse')) {
             $projects = array_reverse($projects, true);
@@ -63,12 +81,10 @@ class ProjectListCommand extends CommandBase
             return 0;
         }
 
-        /** @var \Platformsh\Cli\Service\Table $table */
-        $table = $this->getService('table');
-        $machineReadable = $table->formatIsMachineReadable();
+        $machineReadable = $this->table->formatIsMachineReadable();
 
-        $header = ['ID', 'Title', 'URL', 'Host'];
-        $defaultColumns = ['ID', 'Title', 'URL'];
+        $header = ['id' => 'ID', 'title' => 'Title', 'url' => 'URL', 'host' => 'Region hostname'];
+        $defaultColumns = ['id', 'title', 'host'];
 
         $rows = [];
         foreach ($projects as $project) {
@@ -83,17 +99,17 @@ class ProjectListCommand extends CommandBase
             }
 
             $rows[] = [
-                new AdaptiveTableCell($project->id, ['wrap' => false]),
-                $title,
-                $project->getLink('#ui'),
-                parse_url($project->getUri(), PHP_URL_HOST)
+                'id' => new AdaptiveTableCell($project->id, ['wrap' => false]),
+                'title' => $title,
+                'url' => $project->getLink('#ui'),
+                'host' => parse_url($project->getUri(), PHP_URL_HOST)
             ];
         }
 
         // Display a simple table (and no messages) if the --format is
         // machine-readable (e.g. csv or tsv).
         if ($machineReadable) {
-            $table->render($rows, $header, $defaultColumns);
+            $this->table->render($rows, $header, $defaultColumns);
 
             return 0;
         }
@@ -107,7 +123,7 @@ class ProjectListCommand extends CommandBase
                 $this->stdErr->writeln('No projects found (filters in use: ' . $filtersUsed . ').');
             } else {
                 $this->stdErr->writeln(
-                    'You do not have any ' . $this->config()->get('service.name') . ' projects yet.'
+                    'You do not have any ' . $this->config->get('service.name') . ' projects yet.'
                 );
             }
 
@@ -119,9 +135,9 @@ class ProjectListCommand extends CommandBase
             $this->stdErr->writeln('Your projects are: ');
         }
 
-        $table->render($rows, $header, $defaultColumns);
+        $this->table->render($rows, $header, $defaultColumns);
 
-        $commandName = $this->config()->get('application.executable');
+        $commandName = $this->config->get('application.executable');
         $this->stdErr->writeln([
             '',
             'Get a project by running: <info>' . $commandName . ' get [id]</info>',
@@ -154,7 +170,7 @@ class ProjectListCommand extends CommandBase
                     break;
 
                 case 'my':
-                    $ownerId = $this->api()->getMyAccount()['id'];
+                    $ownerId = $this->api->getMyAccount()['id'];
                     $projects = array_filter($projects, function (Project $project) use ($ownerId) {
                         return $project->owner === $ownerId;
                     });

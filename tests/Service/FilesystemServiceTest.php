@@ -1,10 +1,12 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Tests;
 
+use PHPUnit\Framework\TestCase;
 use Platformsh\Cli\Service\Filesystem;
 
-class FilesystemServiceTest extends \PHPUnit_Framework_TestCase
+class FilesystemServiceTest extends TestCase
 {
     use HasTempDirTrait;
 
@@ -108,7 +110,7 @@ class FilesystemServiceTest extends \PHPUnit_Framework_TestCase
         $path = $this->fs->makePathAbsolute('..');
         $this->assertEquals($testDir, $path);
 
-        $this->setExpectedException('InvalidArgumentException');
+        $this->expectException(\InvalidArgumentException::class);
         $this->fs->makePathAbsolute('nonexistent/test.txt');
     }
 

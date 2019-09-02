@@ -10,7 +10,7 @@
         },
         "updating": [
             {
-                "notes": "* Use Symfony 4; require at least PHP 7.1.14. As this is a breaking change,\n  this increases the CLI major version from 3.x to 4.x.\n* Integrate platformsh/oauth2 library and platformsh/client version 2.x.\n* Cache the DI container.\n* Use service autowiring. This allows new services or commands to be created\n  without extra service configuration (beyond their constructor arguments).\n* Configure command lazy-loading. If using the full command name or alias, this\n  saves around 50ms. Using an abbreviation or shortcut bypasses the performance\n  benefit as it requires all command classes to be instantiated.\n* Lots of other refactoring, including adding static/strict types.\n* Remove deprecated command options.",
+                "notes": "* Use Symfony 4; require at least PHP 7.1.3. As this is a breaking change,\n  this increases the CLI major version from 3.x to 4.x.\n* Integrate platformsh/oauth2 library and platformsh/client version 2.x.\n* Cache the DI container.\n* Use service autowiring. This allows new services or commands to be created\n  without extra service configuration (beyond their constructor arguments).\n* Configure command lazy-loading. If using the full command name or alias, this\n  saves around 50ms. Using an abbreviation or shortcut bypasses the performance\n  benefit as it requires all command classes to be instantiated.\n* Lots of other refactoring, including adding static/strict types.\n* Remove deprecated command options.",
                 "hide from": "4.0.0-dev"
             }
         ]

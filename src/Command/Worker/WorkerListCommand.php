@@ -1,7 +1,12 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Worker;
 
 use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\PropertyFormatter;
+use Platformsh\Cli\Service\Selector;
 use Platformsh\Cli\Service\Table;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -9,18 +14,39 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class WorkerListCommand extends CommandBase
 {
+    protected static $defaultName = 'worker:list';
+
+    private $api;
+    private $formatter;
+    private $selector;
+    private $table;
+
+    public function __construct(
+        Api $api,
+        PropertyFormatter $formatter,
+        Selector $selector,
+        Table $table
+    ) {
+        $this->api = $api;
+        $this->formatter = $formatter;
+        $this->selector = $selector;
+        $this->table = $table;
+        parent::__construct();
+    }
+
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this->setName('worker:list')
-            ->setAliases(['workers'])
+        $this->setAliases(['workers'])
             ->setDescription('Get a list of all deployed workers')
             ->addOption('refresh', null, InputOption::VALUE_NONE, 'Whether to refresh the cache');
-        $this->addProjectOption()
-            ->addEnvironmentOption();
-        Table::configureInput($this->getDefinition());
+
+        $definition = $this->getDefinition();
+        $this->selector->addProjectOption($definition);
+        $this->selector->addEnvironmentOption($definition);
+        $this->table->configureInput($definition);
     }
 
     /**
@@ -28,10 +54,10 @@ class WorkerListCommand extends CommandBase
      */
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
+        $selection = $this->selector->getSelection($input);
 
-        $workers = $this->api()
-            ->getCurrentDeployment($this->getSelectedEnvironment(), $input->getOption('refresh'))
+        $workers = $this->api
+            ->getCurrentDeployment($selection->getEnvironment(), $input->getOption('refresh'))
             ->workers;
         if (empty($workers)) {
             $this->stdErr->writeln('No workers found.');
@@ -39,26 +65,21 @@ class WorkerListCommand extends CommandBase
             return 0;
         }
 
-        /** @var \Platformsh\Cli\Service\PropertyFormatter $formatter */
-        $formatter = $this->getService('property_formatter');
         $rows = [];
         foreach ($workers as $worker) {
             $commands = isset($worker->worker['commands']) ? $worker->worker['commands'] : [];
-            $rows[] = [$worker->name, $worker->type, $formatter->format($commands)];
+            $rows[] = [$worker->name, $worker->type, $this->formatter->format($commands)];
         }
 
-        /** @var \Platformsh\Cli\Service\Table $table */
-        $table = $this->getService('table');
-
-        if (!$table->formatIsMachineReadable()) {
+        if (!$this->table->formatIsMachineReadable()) {
             $this->stdErr->writeln(sprintf(
-                'Workers on the project <info>%s</info>, environment <info>%s</info>:',
-                $this->api()->getProjectLabel($this->getSelectedProject()),
-                $this->api()->getEnvironmentLabel($this->getSelectedEnvironment())
+                'Workers on the project %s, environment %s:',
+                $this->api->getProjectLabel($selection->getProject()),
+                $this->api->getEnvironmentLabel($selection->getEnvironment())
             ));
         }
 
-        $table->render($rows, ['Name', 'Type', 'Commands']);
+        $this->table->render($rows, ['Name', 'Type', 'Commands']);
 
         return 0;
     }

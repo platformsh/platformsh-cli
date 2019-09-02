@@ -1,31 +1,35 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Tests\Util;
 
+use PHPUnit\Framework\TestCase;
 use Platformsh\Cli\Exception\InvalidConfigException;
 use Platformsh\Cli\Util\YamlParser;
 
-class YamlParserTest extends \PHPUnit_Framework_TestCase
+class YamlParserTest extends TestCase
 {
     public function testParseValidYaml()
     {
         $file = 'tests/data/apps/complex-yaml/_platform.app.yaml';
         $parsed = (new YamlParser())->parseFile($file);
         $expected = [
-            'name' => 'complex-yaml',
-            'web' => [
-                'locations' => [
-                    '/' => ['allow' => true, 'scripts' => true],
-                    '/subpath' => ['allow' => true, 'scripts' => true],
+            'definition' => [
+                'name' => 'complex-yaml',
+                'web' => [
+                    'locations' => [
+                        '/' => ['allow' => true, 'scripts' => true],
+                        '/subpath' => ['allow' => true, 'scripts' => true],
+                    ],
                 ],
+                'hooks' => [
+                    'build' => file_get_contents('tests/data/apps/complex-yaml/build-hook.sh'),
+                ],
+                'anchor' => ['foo' => 'bar'],
+                'reuse' => ['foo' => 'bar'],
+                'anchor-include' => ['allow' => true, 'scripts' => true],
+                'reuse-include' => ['allow' => true, 'scripts' => true],
             ],
-            'hooks' => [
-                'build' => file_get_contents('tests/data/apps/complex-yaml/build-hook.sh'),
-            ],
-            'anchor' => ['foo' => 'bar'],
-            'reuse' => ['foo' => 'bar'],
-            'anchor-include' => ['allow' => true, 'scripts' => true],
-            'reuse-include' => ['allow' => true, 'scripts' => true],
         ];
         $this->assertEquals($expected, $parsed);
     }
@@ -35,7 +39,8 @@ class YamlParserTest extends \PHPUnit_Framework_TestCase
         $file = 'tests/data/apps/complex-yaml/_platform.app.yaml';
         $content = file_get_contents($file);
         $content .= "\ntest: !include nonexistent.yml";
-        $this->setExpectedException(InvalidConfigException::class, 'File not found');
+        $this->expectException(InvalidConfigException::class);
+        $this->expectExceptionMessage('File not found');
         (new YamlParser())->parseContent($content, $file);
     }
 

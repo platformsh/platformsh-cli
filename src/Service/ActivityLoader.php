@@ -2,7 +2,7 @@
 
 namespace Platformsh\Cli\Service;
 
-use Platformsh\Client\Model\Resource;
+use Platformsh\Client\Model\ApiResourceBase;
 use Symfony\Component\Console\Helper\ProgressBar;
 use Symfony\Component\Console\Output\ConsoleOutputInterface;
 use Symfony\Component\Console\Output\NullOutput;
@@ -39,14 +39,14 @@ class ActivityLoader
     /**
      * Load activities.
      *
-     * @param Resource    $apiResource
-     * @param int         $limit
-     * @param string|null $type
-     * @param int|null    $startsAt
+     * @param \Platformsh\Client\Model\ApiResourceBase $apiResource
+     * @param int                                      $limit
+     * @param string|null                              $type
+     * @param int|null                                 $startsAt
      *
      * @return \Platformsh\Client\Model\Activity[]
      */
-    public function load(Resource $apiResource, $limit, $type, $startsAt)
+    public function load(ApiResourceBase $apiResource, $limit, $type, $startsAt)
     {
         /** @var \Platformsh\Client\Model\Environment|\Platformsh\Client\Model\Project $apiResource */
         $activities = $apiResource->getActivities($limit, $type, $startsAt);

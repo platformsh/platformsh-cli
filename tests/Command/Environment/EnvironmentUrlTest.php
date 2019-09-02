@@ -2,15 +2,13 @@
 
 namespace Platformsh\Cli\Tests\Command\Environment;
 
-use Platformsh\Cli\Command\Environment\EnvironmentUrlCommand;
-use Symfony\Component\Console\Input\ArrayInput;
-use Symfony\Component\Console\Output\BufferedOutput;
-use Symfony\Component\Console\Output\OutputInterface;
+use PHPUnit\Framework\TestCase;
+use Platformsh\Cli\Tests\CommandRunner;
 
 /**
  * @group commands
  */
-class EnvironmentUrlTest extends \PHPUnit_Framework_TestCase
+class EnvironmentUrlTest extends TestCase
 {
     public function setUp() {
         $mockRoutes = base64_encode(json_encode([
@@ -33,48 +31,37 @@ class EnvironmentUrlTest extends \PHPUnit_Framework_TestCase
         putenv('PLATFORM_ROUTES=');
     }
 
-    private function runCommand(array $args, $verbosity = OutputInterface::VERBOSITY_NORMAL) {
-        $output = new BufferedOutput();
-        $output->setVerbosity($verbosity);
-        (new EnvironmentUrlCommand())
-            ->run(new ArrayInput($args), $output);
-
-        return $output->fetch();
-    }
-
     public function testUrl() {
         $this->assertEquals(
             "https://example.com\n"
             . "http://example.com\n",
-            $this->runCommand([
-                '--pipe' => true,
-            ])
+            (new CommandRunner())->run('environment:url', [
+                '--pipe',
+            ])->getOutput()
         );
     }
 
     public function testPrimaryUrl() {
         $this->assertEquals(
             'https://example.com',
-            rtrim($this->runCommand([
-                '--primary' => true,
-                '--browser' => '0',
-            ]), "\n")
+            rtrim((new CommandRunner())->run('environment:url', [
+                '--primary',
+                '--browser', '0',
+            ])->getOutput(), "\n")
         );
     }
 
     public function testNonExistentBrowserIsNotFound() {
-        putenv('DISPLAY=fake');
-        $result = $this->runCommand([
-            '--browser' => 'nonexistent',
-        ]);
-        $this->assertContains('Command not found: nonexistent', $result);
-        $this->assertContains("https://example.com\n", $result);
+        $result = (new CommandRunner())->run('environment:url', [
+            '--browser', 'nonexistent',
+        ], ['DISPLAY' => 'fake']);
+        $this->assertContains('Command not found: nonexistent', $result->getErrorOutput());
+        $this->assertContains("https://example.com\n", $result->getOutput());
 
-        putenv('DISPLAY=none');
-        $result = $this->runCommand([
-            '--browser' => 'nonexistent',
-        ], OutputInterface::VERBOSITY_DEBUG);
-        $this->assertContains('no display found', $result);
-        $this->assertContains("https://example.com\n", $result);
+        $result = (new CommandRunner())->run('environment:url', [
+            '--browser', 'nonexistent',
+        ], ['DISPLAY' => 'none', 'PLATFORMSH_CLI_DEBUG' => '1']);
+        $this->assertContains('no display found', $result->getErrorOutput());
+        $this->assertContains("https://example.com\n", $result->getOutput());
     }
 }

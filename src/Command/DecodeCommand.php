@@ -2,6 +2,7 @@
 
 namespace Platformsh\Cli\Command;
 
+use Platformsh\Cli\Service\Config;
 use Platformsh\Cli\Util\NestedArrayUtil;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
@@ -10,14 +11,20 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class DecodeCommand extends CommandBase
 {
+    protected static $defaultName = 'decode';
+
+    private $config;
+
+    public function __construct(Config $config) {
+        $this->config = $config;
+        parent::__construct();
+    }
 
     protected function configure()
     {
-        $envPrefix = $this->config()->get('service.env_prefix');
+        $envPrefix = $this->config->get('service.env_prefix');
 
-        $this
-            ->setName('decode')
-            ->addArgument('value', InputArgument::REQUIRED, 'The variable value to decode')
+        $this->addArgument('value', InputArgument::REQUIRED, 'The variable value to decode')
             ->addOption('property', 'P', InputOption::VALUE_REQUIRED, 'The property to view within the variable')
             ->setDescription(sprintf('Decode an encoded string such as %sVARIABLES', $envPrefix));
 

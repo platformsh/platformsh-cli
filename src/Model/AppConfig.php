@@ -1,8 +1,10 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Model;
 
 use Platformsh\Cli\Exception\InvalidConfigException;
+use Platformsh\Cli\Service\Mount;
 use Platformsh\Client\Model\Deployment\WebApp;
 
 /**
@@ -109,6 +111,10 @@ class AppConfig
             foreach ($oldConfig['blacklist'] as $pattern) {
                 $location['rules'][$pattern]['allow'] = false;
             }
+        }
+
+        if (!empty($config['mounts'])) {
+            $config['mounts'] = (new Mount())->normalizeMounts($config['mounts']);
         }
 
         return $config;

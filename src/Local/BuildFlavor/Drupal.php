@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Local\BuildFlavor;
 
@@ -53,7 +54,7 @@ class Drupal extends BuildFlavorBase
                ->depth($depth)
                ->name('index.php');
         foreach ($finder as $file) {
-            $f = fopen($file, 'r');
+            $f = fopen($file->getPath(), 'r');
             $beginning = fread($f, 3178);
             fclose($f);
             if (strpos($beginning, 'Drupal') !== false) {
@@ -67,7 +68,7 @@ class Drupal extends BuildFlavorBase
                ->depth($depth)
                ->name('composer.json');
         foreach ($finder as $file) {
-            $composerJson = json_decode(file_get_contents($file), true);
+            $composerJson = json_decode($file->getContents(), true);
             if (isset($composerJson['require']['drupal/core'])
                 || isset($composerJson['require']['drupal/phing-drush-task'])) {
                 return true;

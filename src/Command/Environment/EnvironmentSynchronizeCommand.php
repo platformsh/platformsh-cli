@@ -1,7 +1,13 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Environment;
 
 use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\ActivityService;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\QuestionHelper;
+use Platformsh\Cli\Service\Selector;
 use Stecman\Component\Symfony\Console\BashCompletion\Completion\CompletionAwareInterface;
 use Stecman\Component\Symfony\Console\BashCompletion\CompletionContext;
 use Symfony\Component\Console\Input\InputArgument;
@@ -11,18 +17,38 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class EnvironmentSynchronizeCommand extends CommandBase implements CompletionAwareInterface
 {
+    protected static $defaultName = 'environment:synchronize';
+
+    private $api;
+    private $activityService;
+    private $questionHelper;
+    private $selector;
+
+    public function __construct(
+        Api $api,
+        ActivityService $activityService,
+        QuestionHelper $questionHelper,
+        Selector $selector
+    ) {
+        $this->api = $api;
+        $this->activityService = $activityService;
+        $this->questionHelper = $questionHelper;
+        $this->selector = $selector;
+        parent::__construct();
+    }
 
     protected function configure()
     {
-        $this
-            ->setName('environment:synchronize')
-            ->setAliases(['sync'])
+        $this->setAliases(['sync'])
             ->setDescription("Synchronize an environment's code and/or data from its parent")
             ->addArgument('synchronize', InputArgument::IS_ARRAY, 'What to synchronize: "code", "data" or both')
             ->addOption('rebase', null, InputOption::VALUE_NONE, 'Synchronize code by rebasing instead of merging');
-        $this->addProjectOption()
-             ->addEnvironmentOption()
-             ->addWaitOptions();
+
+        $definition = $this->getDefinition();
+        $this->selector->addEnvironmentOption($definition);
+        $this->selector->addProjectOption($definition);
+        $this->activityService->configureInput($definition);
+
         $this->setHelp(<<<EOT
 This command synchronizes to a child environment from its parent environment.
 
@@ -38,9 +64,9 @@ EOT
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
+        $selection = $this->selector->getSelection($input);
 
-        $selectedEnvironment = $this->getSelectedEnvironment();
+        $selectedEnvironment = $selection->getEnvironment();
         $environmentId = $selectedEnvironment->id;
 
         if (!$selectedEnvironment->operationAvailable('synchronize', true)) {
@@ -58,9 +84,6 @@ EOT
         }
 
         $parentId = $selectedEnvironment->parent;
-
-        /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-        $questionHelper = $this->getService('question_helper');
 
         $rebase = (bool) $input->getOption('rebase');
 
@@ -88,17 +111,17 @@ EOT
                 $parentId,
                 $environmentId
             );
-            if (!$questionHelper->confirm($confirmText)) {
+            if (!$this->questionHelper->confirm($confirmText)) {
                 return 1;
             }
         } else {
-            $syncCode = $questionHelper->confirm(
+            $syncCode = $this->questionHelper->confirm(
                 "Do you want to synchronize <options=underscore>code</> from <info>$parentId</info> to <info>$environmentId</info>?",
                 false
             );
 
             if ($syncCode && !$rebase) {
-                $rebase = $questionHelper->confirm(
+                $rebase = $this->questionHelper->confirm(
                     "Do you want to synchronize code by rebasing instead of merging?",
                     false
                 );
@@ -110,7 +133,7 @@ EOT
 
             $this->stdErr->writeln('');
 
-            $syncData = $questionHelper->confirm(
+            $syncData = $this->questionHelper->confirm(
                 "Do you want to synchronize <options=underscore>data</> from <info>$parentId</info> to <info>$environmentId</info>?",
                 false
             );
@@ -125,10 +148,8 @@ EOT
         $this->stdErr->writeln("Synchronizing environment <info>$environmentId</info>");
 
         $activity = $selectedEnvironment->synchronize($syncData, $syncCode, $rebase);
-        if ($this->shouldWait($input)) {
-            /** @var \Platformsh\Cli\Service\ActivityMonitor $activityMonitor */
-            $activityMonitor = $this->getService('activity_monitor');
-            $success = $activityMonitor->waitAndLog(
+        if ($this->activityService->shouldWait($input)) {
+            $success = $this->activityService->waitAndLog(
                 $activity,
                 "Synchronization complete",
                 "Synchronization failed"

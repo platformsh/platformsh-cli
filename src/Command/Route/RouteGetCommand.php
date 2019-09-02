@@ -1,10 +1,16 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Route;
 
 use Platformsh\Cli\Command\CommandBase;
 use Platformsh\Cli\Model\Host\LocalHost;
 use Platformsh\Cli\Model\Route;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\Config;
 use Platformsh\Cli\Service\PropertyFormatter;
+use Platformsh\Cli\Service\QuestionHelper;
+use Platformsh\Cli\Service\Selector;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -12,31 +18,53 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class RouteGetCommand extends CommandBase
 {
+    protected static $defaultName = 'route:get';
+
+    private $api;
+    private $config;
+    private $formatter;
+    private $questionHelper;
+    private $selector;
+
+    public function __construct(
+        Api $api,
+        Config $config,
+        PropertyFormatter $formatter,
+        QuestionHelper $questionHelper,
+        Selector $selector
+    ) {
+        $this->api = $api;
+        $this->config = $config;
+        $this->formatter = $formatter;
+        $this->questionHelper = $questionHelper;
+        $this->selector = $selector;
+        parent::__construct();
+    }
+
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('route:get')
-            ->setDescription('View a resolved route')
+        $this->setDescription('View a resolved route')
             ->addArgument('route', InputArgument::OPTIONAL, "The route's original URL")
             ->addOption('id', null, InputOption::VALUE_REQUIRED, 'A route ID to select')
             ->addOption('primary', '1', InputOption::VALUE_NONE, 'Select the primary route')
             ->addOption('property', 'P', InputOption::VALUE_REQUIRED, 'The property to display')
             ->addOption('refresh', null, InputOption::VALUE_NONE, 'Bypass the cache of routes');
-        PropertyFormatter::configureInput($this->getDefinition());
-        $this->addProjectOption()
-            ->addEnvironmentOption();
-        $this->addOption('app', 'A', InputOption::VALUE_REQUIRED, '[Deprecated option, no longer used]');
-        $this->addOption('identity-file', 'i', InputOption::VALUE_REQUIRED, '[Deprecated option, no longer used]');
+
+        $definition = $this->getDefinition();
+        $this->selector->addProjectOption($definition);
+        $this->selector->addEnvironmentOption($definition);
+        $this->formatter->configureInput($definition);
+
         $this->addExample('View the URL to the https://{default}/ route', "'https://{default}/' -P url");
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
         // Allow override via PLATFORM_ROUTES.
-        $prefix = $this->config()->get('service.env_prefix');
+        $prefix = $this->config->get('service.env_prefix');
         if (getenv($prefix . 'ROUTES') && !LocalHost::conflictsWithCommandLineOptions($input, $prefix)) {
             $this->debug('Reading routes from environment variable ' . $prefix . 'ROUTES');
             $decoded = json_decode(base64_decode(getenv($prefix . 'ROUTES'), true), true);
@@ -46,14 +74,11 @@ class RouteGetCommand extends CommandBase
             $routes = Route::fromVariables($decoded);
         } else {
             $this->debug('Reading routes from the API');
-            $this->validateInput($input);
-            $environment = $this->getSelectedEnvironment();
-            $deployment = $this->api()
+            $environment = $this->selector->getSelection($input)->getEnvironment();
+            $deployment = $this->api
                 ->getCurrentDeployment($environment, $input->getOption('refresh'));
             $routes = Route::fromDeploymentApi($deployment->routes);
         }
-
-        $this->warnAboutDeprecatedOptions(['app', 'identity-file']);
 
         /** @var \Platformsh\Cli\Model\Route|false $selectedRoute */
         $selectedRoute = false;
@@ -92,8 +117,6 @@ class RouteGetCommand extends CommandBase
 
                 return 1;
             }
-            /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-            $questionHelper = $this->getService('question_helper');
             $items = [];
             foreach ($routes as $route) {
                 $originalUrl = $route->original_url;
@@ -105,8 +128,8 @@ class RouteGetCommand extends CommandBase
                     $items[$originalUrl] .= ' - <info>primary</info>';
                 }
             }
-            uksort($items, [$this->api(), 'urlSort']);
-            $originalUrl = $questionHelper->choose($items, 'Enter a number to choose a route:');
+            uksort($items, [$this->api, 'urlSort']);
+            $originalUrl = $this->questionHelper->choose($items, 'Enter a number to choose a route:');
         }
 
         if (!$selectedRoute && $originalUrl !== null && $originalUrl !== '') {
@@ -130,13 +153,7 @@ class RouteGetCommand extends CommandBase
             return 1;
         }
 
-        // Add defaults.
-        $selectedRoute = $selectedRoute->getProperties();
-
-        /** @var PropertyFormatter $propertyFormatter */
-        $propertyFormatter = $this->getService('property_formatter');
-
-        $propertyFormatter->displayData($output, $selectedRoute, $input->getOption('property'));
+        $this->formatter->displayData($output, $selectedRoute->getProperties(), $input->getOption('property'));
 
         return 0;
     }

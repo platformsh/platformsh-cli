@@ -1,9 +1,10 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Exception;
 
-use GuzzleHttp\Message\RequestInterface;
-use GuzzleHttp\Message\ResponseInterface;
+use Psr\Http\Message\RequestInterface;
+use Psr\Http\Message\ResponseInterface;
 use Platformsh\Cli\Service\Config;
 
 class LoginRequiredException extends HttpException

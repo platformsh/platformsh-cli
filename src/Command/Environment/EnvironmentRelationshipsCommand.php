@@ -1,9 +1,14 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Environment;
 
-use GuzzleHttp\Query;
-use GuzzleHttp\Url;
+use GuzzleHttp\Psr7\Uri;
 use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\PropertyFormatter;
+use Platformsh\Cli\Service\Relationships;
+use Platformsh\Cli\Service\Selector;
 use Platformsh\Cli\Service\Ssh;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
@@ -12,22 +17,44 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class EnvironmentRelationshipsCommand extends CommandBase
 {
+    protected static $defaultName = 'environment:relationships';
+
+    private $config;
+    private $formatter;
+    private $relationships;
+    private $selector;
+    private $ssh;
+
+    public function __construct(
+        Config $config,
+        PropertyFormatter $formatter,
+        Relationships $relationships,
+        Selector $selector,
+        Ssh $ssh
+    ) {
+        $this->config = $config;
+        $this->formatter = $formatter;
+        $this->relationships = $relationships;
+        $this->selector = $selector;
+        $this->ssh = $ssh;
+        parent::__construct();
+    }
+
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('environment:relationships')
-            ->setAliases(['relationships'])
+        $this->setAliases(['relationships'])
             ->setDescription('Show an environment\'s relationships')
             ->addArgument('environment', InputArgument::OPTIONAL, 'The environment')
             ->addOption('property', 'P', InputOption::VALUE_REQUIRED, 'The relationship property to view')
             ->addOption('refresh', null, InputOption::VALUE_NONE, 'Whether to refresh the relationships');
-        $this->addProjectOption()
-             ->addEnvironmentOption()
-             ->addAppOption();
-        Ssh::configureInput($this->getDefinition());
+
+        $definition = $this->getDefinition();
+        $this->selector->addAllOptions($definition);
+        $this->ssh->configureInput($definition);
+
         $this->addExample("View all the current environment's relationships");
         $this->addExample("View the 'master' environment's relationships", 'master');
         $this->addExample("View the 'master' environment's database port", 'master --property database.0.port');
@@ -35,11 +62,8 @@ class EnvironmentRelationshipsCommand extends CommandBase
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        /** @var \Platformsh\Cli\Service\Relationships $relationshipsService */
-        $relationshipsService = $this->getService('relationships');
-        $host = $this->selectHost($input, $relationshipsService->hasLocalEnvVar());
-
-        $relationships = $relationshipsService->getRelationships($host, $input->getOption('refresh'));
+        $selection = $this->selector->getSelection($input, false, $this->relationships->hasLocalEnvVar());
+        $relationships = $this->relationships->getRelationships($selection->getHost(), $input->getOption('refresh'));
 
         foreach ($relationships as $name => $relationship) {
             foreach ($relationship as $index => $instance) {
@@ -49,9 +73,7 @@ class EnvironmentRelationshipsCommand extends CommandBase
             }
         }
 
-        /** @var \Platformsh\Cli\Service\PropertyFormatter $formatter */
-        $formatter = $this->getService('property_formatter');
-        $formatter->displayData($output, $relationships, $input->getOption('property'));
+        $this->formatter->displayData($output, $relationships, $input->getOption('property'));
 
         return 0;
     }
@@ -65,16 +87,28 @@ class EnvironmentRelationshipsCommand extends CommandBase
      */
     private function buildUrl(array $instance)
     {
-        $parts = $instance;
-        // Convert to parse_url parts.
-        $parts['user'] = $parts['username'];
-        $parts['pass'] = $parts['password'];
-        unset($parts['username'], $parts['password']);
-        // The 'query' is expected to be a string.
-        if (is_array($parts['query'])) {
-            $parts['query'] = (new Query($parts['query']))->__toString();
+        // Convert to \GuzzleHttp\Psr7\Uri parts.
+        $map = [
+            'scheme' => 'scheme',
+            'user' => 'username',
+            'pass' => 'password',
+            'host' => 'host',
+            'port' => 'port',
+            'path' => 'path',
+            'fragment' => 'fragment',
+        ];
+        $parts = [];
+        foreach ($map as $uriPart => $property) {
+            if (array_key_exists($property, $instance)) {
+                $parts[$uriPart] = $instance[$property];
+            }
+        }
+        $uri = Uri::fromParts($parts);
+
+        if (isset($instance['query'])) {
+            $uri = Uri::withQueryValues($uri, $instance['query']);
         }
 
-        return Url::buildUrl($parts);
+        return $uri->__toString();
     }
 }

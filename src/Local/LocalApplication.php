@@ -1,11 +1,12 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Local;
 
 use Platformsh\Cli\Model\AppConfig;
 use Platformsh\Cli\Service\Config;
 use Platformsh\Cli\Exception\InvalidConfigException;
 use Platformsh\Cli\Local\BuildFlavor\BuildFlavorInterface;
-use Platformsh\Cli\Service\Mount;
 use Platformsh\Cli\Util\YamlParser;
 use Symfony\Component\Finder\Finder;
 
@@ -16,7 +17,6 @@ class LocalApplication
     protected $config;
     protected $sourceDir;
     protected $cliConfig;
-    protected $mount;
 
     private $single = false;
 
@@ -33,7 +33,6 @@ class LocalApplication
         $this->cliConfig = $cliConfig ?: new Config();
         $this->appRoot = $appRoot;
         $this->sourceDir = $sourceDir ?: $appRoot;
-        $this->mount = new Mount();
     }
 
     /**
@@ -134,6 +133,9 @@ class LocalApplication
     /**
      * Get the application's configuration, parsed from its YAML definition.
      *
+     * @throws \Exception if the configuration file cannot be read
+     * @throws InvalidConfigException if config is invalid
+     *
      * @return array
      * @throws \Exception
      */
@@ -170,11 +172,17 @@ class LocalApplication
      */
     public function getSharedFileMounts()
     {
-        $config = $this->getConfig();
+        $appConfig = $this->getConfig();
+        $sharedFileMounts = [];
+        if (!empty($appConfig['mounts'])) {
+            foreach ($appConfig['mounts'] as $path => $definition) {
+                if (isset($definition['source_path'])) {
+                    $sharedFileMounts[$path] = $definition['source_path'] ?: 'files';
+                }
+            }
+        }
 
-        return !empty($config['mounts'])
-            ? $this->mount->getSharedFileMounts($config['mounts'])
-            : [];
+        return $sharedFileMounts;
     }
 
     /**

@@ -2,9 +2,10 @@
 
 namespace Platformsh\Cli\Tests\Model;
 
+use PHPUnit\Framework\TestCase;
 use Platformsh\Cli\Model\Variable;
 
-class VariableTest extends \PHPUnit_Framework_TestCase
+class VariableTest extends TestCase
 {
     private $invalidMessage = 'Variables must be defined as type:name=value';
 
@@ -38,29 +39,34 @@ class VariableTest extends \PHPUnit_Framework_TestCase
 
     public function testParseInvalidVariableType()
     {
-        $this->setExpectedException(\InvalidArgumentException::class, 'Invalid variable type');
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid variable type');
         (new Variable())->parse('a/b:c=d');
     }
 
 
     public function testParseInvalidVariableName()
     {
-        $this->setExpectedException(\InvalidArgumentException::class, 'Invalid variable name');
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid variable name');
         (new Variable())->parse('a:b(c)=d');
     }
 
     public function testParseVariableWithNoDelimiter() {
-        $this->setExpectedException(\InvalidArgumentException::class, $this->invalidMessage);
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage($this->invalidMessage);
         (new Variable())->parse('foo');
     }
 
     public function testParseVariableWithWrongDelimiterOrder() {
-        $this->setExpectedException(\InvalidArgumentException::class, $this->invalidMessage);
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage($this->invalidMessage);
         (new Variable())->parse('a=b:c');
     }
 
     public function testParseVariableWithEmptyType() {
-        $this->setExpectedException(\InvalidArgumentException::class, $this->invalidMessage);
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage($this->invalidMessage);
         (new Variable())->parse(':b=c');
     }
 }

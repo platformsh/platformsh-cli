@@ -2,17 +2,18 @@
 
 namespace Platformsh\Cli\Tests\Command\Route;
 
-use Platformsh\Cli\Command\Route\RouteListCommand;
-use Symfony\Component\Console\Input\ArrayInput;
-use Symfony\Component\Console\Output\BufferedOutput;
+use PHPUnit\Framework\TestCase;
+use Platformsh\Cli\Tests\CommandRunner;
 
 /**
  * @group commands
  */
-class RouteListTest extends \PHPUnit_Framework_TestCase
+class RouteListTest extends TestCase
 {
+    private $mockRoutes;
+
     public function setUp() {
-        $mockRoutes = base64_encode(json_encode([
+        $this->mockRoutes = base64_encode(json_encode([
             'https://example.com' => [
                 'primary' => true,
                 'type' => 'upstream',
@@ -25,19 +26,12 @@ class RouteListTest extends \PHPUnit_Framework_TestCase
                 'original_url' => 'http://{default}',
             ],
         ]));
-        putenv('PLATFORM_ROUTES=' . $mockRoutes);
-    }
-
-    public function tearDown() {
-        putenv('PLATFORM_ROUTES=');
     }
 
     private function runCommand(array $args) {
-        $output = new BufferedOutput();
-        (new RouteListCommand())
-            ->run(new ArrayInput($args), $output);
-
-        return $output->fetch();
+        return (new CommandRunner())
+            ->run('route:list', $args, ['PLATFORM_ROUTES' => $this->mockRoutes])
+            ->getOutput();
     }
 
     public function testListRoutes() {
@@ -45,9 +39,9 @@ class RouteListTest extends \PHPUnit_Framework_TestCase
             "https://{default}\tupstream\tapp:http\n"
             . "http://{default}\tredirect\thttps://{default}\n",
             $this->runCommand([
-                '--format' => 'tsv',
-                '--columns' => ['route,type,to'],
-                '--no-header' => true,
+                '--format', 'tsv',
+                '--columns', 'route,type,to',
+                '--no-header',
             ])
         );
     }

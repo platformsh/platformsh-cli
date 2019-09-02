@@ -1,7 +1,12 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Command;
 
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\Identifier;
+use Platformsh\Cli\Service\Shell;
 use Stecman\Component\Symfony\Console\BashCompletion\Completion\CompletionAwareInterface;
 use Stecman\Component\Symfony\Console\BashCompletion\CompletionContext;
 use Symfony\Component\Console\Exception\InvalidArgumentException;
@@ -13,12 +18,29 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class MultiCommand extends CommandBase implements CompletionAwareInterface
 {
-    protected $canBeRunMultipleTimes = false;
+    protected static $defaultName = 'multi';
+
+    private $api;
+    private $config;
+    private $identifier;
+    private $shell;
+
+    public function __construct(
+        Api $api,
+        Config $config,
+        Identifier $identifier,
+        Shell $shell
+    ) {
+        $this->api = $api;
+        $this->config = $config;
+        $this->identifier = $identifier;
+        $this->shell = $shell;
+        parent::__construct();
+    }
 
     protected function configure()
     {
-        $this->setName('multi')
-            ->setDescription('Execute a command on multiple projects')
+        $this->setDescription('Execute a command on multiple projects')
             ->addArgument('cmd', InputArgument::REQUIRED, 'The command to execute')
             ->addOption('projects', 'p', InputOption::VALUE_REQUIRED, 'A list of project IDs, separated by commas and/or whitespace')
             ->addOption('continue', null, InputOption::VALUE_NONE, 'Continue running commands even if an exception is encountered')
@@ -28,6 +50,14 @@ class MultiCommand extends CommandBase implements CompletionAwareInterface
             'List variables on the "master" environment for multiple projects',
             "--projects l7ywemwizmmgb,o43m25zns6k2d,3nyujoslhydhx 'variable:get --environment master'"
         );
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function canBeRunMultipleTimes(): bool
+    {
+        return false;
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
@@ -45,7 +75,7 @@ class MultiCommand extends CommandBase implements CompletionAwareInterface
             $this->stdErr->writeln(sprintf(
                 'The command <error>%s</error> cannot be run via "%s multi".',
                 $commandName,
-                $this->config()->get('application.executable')
+                $this->config->get('application.executable')
             ));
             return 1;
         } elseif (!$command->getDefinition()->hasOption('project')) {
@@ -71,7 +101,7 @@ class MultiCommand extends CommandBase implements CompletionAwareInterface
         ));
         foreach ($projects as $project) {
             $this->stdErr->writeln('');
-            $this->stdErr->writeln('<options=reverse>*</> Project: ' . $this->api()->getProjectLabel($project, false));
+            $this->stdErr->writeln('<options=reverse>*</> Project: ' . $this->api->getProjectLabel($project, false));
             try {
                 $application->setCurrentCommand($command);
                 $commandInput = new StringInput($commandLine . ' --project ' . escapeshellarg($project->id));
@@ -120,7 +150,7 @@ class MultiCommand extends CommandBase implements CompletionAwareInterface
         }
 
         $dialogRc = file_get_contents(CLI_ROOT . '/resources/console/dialogrc');
-        $dialogRcFile = $this->config()->getWritableUserDir() . '/dialogrc';
+        $dialogRcFile = $this->config->getWritableUserDir() . '/dialogrc';
         if ($dialogRc !== false && (file_exists($dialogRcFile) || file_put_contents($dialogRcFile, $dialogRc))) {
             putenv('DIALOGRC=' . $dialogRcFile);
         }
@@ -154,9 +184,9 @@ class MultiCommand extends CommandBase implements CompletionAwareInterface
      */
     protected function getAllProjects(InputInterface $input)
     {
-        $projects = $this->api()->getProjects();
+        $projects = $this->api->getProjects();
         if ($input->getOption('sort')) {
-            $this->api()->sortResources($projects, $input->getOption('sort'));
+            $this->api->sortResources($projects, $input->getOption('sort'));
         }
         if ($input->getOption('reverse')) {
             $projects = array_reverse($projects, true);
@@ -181,20 +211,17 @@ class MultiCommand extends CommandBase implements CompletionAwareInterface
     {
         $projectList = $input->getOption('projects');
 
-        /** @var \Platformsh\Cli\Service\Identifier $identifier */
-        $identifier = $this->getService('identifier');
-
         if (!empty($projectList)) {
             $missing = [];
             $selected = [];
             foreach ($this->splitProjectList($projectList) as $projectId) {
                 try {
-                    $result = $identifier->identify($projectId);
+                    $result = $this->identifier->identify($projectId);
                 } catch (InvalidArgumentException $e) {
                     $missing[] = $projectId;
                     continue;
                 }
-                $project = $this->api()->getProject($result['projectId'], $result['host']);
+                $project = $this->api->getProject($result['projectId'], $result['host']);
                 if ($project !== false) {
                     $selected[$project->id] = $project;
                 } else {
@@ -214,9 +241,7 @@ class MultiCommand extends CommandBase implements CompletionAwareInterface
             return false;
         }
 
-        /** @var \Platformsh\Cli\Service\Shell $shell */
-        $shell = $this->getService('shell');
-        if (!$shell->commandExists('dialog')) {
+        if (!$this->shell->commandExists('dialog')) {
             $this->stdErr->writeln('The "dialog" utility is required for interactive use.');
             $this->stdErr->writeln('You can specify projects via the --projects option.');
             return false;

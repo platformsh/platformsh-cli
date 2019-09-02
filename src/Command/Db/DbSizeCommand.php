@@ -1,10 +1,17 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Command\Db;
 
 use Platformsh\Cli\Command\CommandBase;
 use Platformsh\Cli\Model\Host\HostInterface;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\GitDataApi;
+use Platformsh\Cli\Service\QuestionHelper;
 use Platformsh\Cli\Service\Relationships;
+use Platformsh\Cli\Service\Selector;
+use Platformsh\Cli\Service\Shell;
 use Platformsh\Cli\Service\Ssh;
 use Platformsh\Cli\Service\Table;
 use Platformsh\Client\Model\Deployment\Service;
@@ -16,41 +23,74 @@ use Symfony\Component\Console\Output\OutputInterface;
 class DbSizeCommand extends CommandBase
 {
 
+    protected static $defaultName = 'db:size';
+
     const RED_WARNING_THRESHOLD = 90;//percentage
     const YELLOW_WARNING_THRESHOLD = 80;//percentage
     const BYTE_TO_MEGABYTE = 1048576;
     const WASTED_SPACE_WARNING_THRESHOLD = 200;//percentage
 
+    private $api;
+    private $config;
+    private $gitDataApi;
+    private $questionHelper;
+    private $relationships;
+    private $selector;
+    private $shell;
+    private $ssh;
+    private $table;
+
+    public function __construct(
+        Api $api,
+        Config $config,
+        GitDataApi $gitDataApi,
+        QuestionHelper $questionHelper,
+        Relationships $relationships,
+        Selector $selector,
+        Shell $shell,
+        Ssh $ssh,
+        Table $table
+    ) {
+        $this->api = $api;
+        $this->config = $config;
+        $this->gitDataApi = $gitDataApi;
+        $this->questionHelper = $questionHelper;
+        $this->relationships = $relationships;
+        $this->selector = $selector;
+        $this->shell = $shell;
+        $this->ssh = $ssh;
+        $this->table = $table;
+        parent::__construct();
+    }
+
     /**
      * {@inheritDoc}
      */
     protected function configure() {
-        $this->setName('db:size')
-            ->setDescription('Estimate the disk usage of a database')
+        $this->setDescription('Estimate the disk usage of a database')
             ->addOption('bytes', 'B', InputOption::VALUE_NONE, 'Show sizes in bytes.')
             ->addOption('cleanup', 'C', InputOption::VALUE_NONE, 'Check if tables can be cleaned up and show me recommendations (InnoDb only).')
             ->setHelp(
                 "This is an estimate of the database disk usage. The real size on disk is usually a bit higher because of overhead."
             );
-        $this->addProjectOption()->addEnvironmentOption()->addAppOption();
-        Relationships::configureInput($this->getDefinition());
-        Table::configureInput($this->getDefinition());
-        Ssh::configureInput($this->getDefinition());
+
+        $definition = $this->getDefinition();
+        $this->selector->addAllOptions($definition);
+        $this->relationships->configureInput($definition);
+        $this->ssh->configureInput($definition);
+        $this->table->configureInput($definition);
     }
 
     /**
      * {@inheritDoc}
      */
     protected function execute(InputInterface $input, OutputInterface $output) {
-        /** @var \Platformsh\Cli\Service\Relationships $relationships */
-        $relationships = $this->getService('relationships');
+        $selection = $this->selector->getSelection($input, false, $this->relationships->hasLocalEnvVar(), true);
 
-        $this->validateInput($input);
-        $container = $this->selectRemoteContainer($input);
+        $host = $selection->getHost();
 
-        $host = $this->selectHost($input, $relationships->hasLocalEnvVar(), $container);
+        $database = $this->relationships->chooseDatabase($host, $input, $output);
 
-        $database = $relationships->chooseDatabase($host, $input, $output);
         if (empty($database)) {
             $this->stdErr->writeln('No database selected.');
             return 1;
@@ -63,7 +103,7 @@ class DbSizeCommand extends CommandBase
 
         // Get information about the deployed service associated with the
         // selected relationship.
-        $deployment = $this->api()->getCurrentDeployment($this->getSelectedEnvironment());
+        $deployment = $this->api->getCurrentDeployment($selection->getEnvironment());
         $service = $deployment->getService($dbServiceName);
 
         $this->stdErr->writeln(sprintf('Checking database service <comment>%s</comment>...', $dbServiceName));
@@ -73,9 +113,7 @@ class DbSizeCommand extends CommandBase
         $estimatedUsage = $this->getEstimatedUsage($host, $database);
         $percentageUsed = round($estimatedUsage * 100 / $allocatedDisk);
 
-        /** @var \Platformsh\Cli\Service\Table $table */
-        $table = $this->getService('table');
-        $machineReadable = $table->formatIsMachineReadable();
+        $machineReadable = $this->table->formatIsMachineReadable();
         $showInBytes = $input->getOption('bytes') || $machineReadable;
 
         $columns  = ['max' => 'Allocated disk', 'used' => 'Estimated usage', 'percent_used' => '% used'];
@@ -86,7 +124,7 @@ class DbSizeCommand extends CommandBase
         ];
 
         $this->stdErr->writeln('');
-        $table->render([$values], $columns);
+        $this->table->render([$values], $columns);
 
         $this->showWarnings($percentageUsed);
 
@@ -154,7 +192,7 @@ class DbSizeCommand extends CommandBase
         $this->stdErr->writeln("Only run these when you know what you're doing.");
         $this->stdErr->writeln('');
 
-        if ($this->getService('question_helper')->confirm('Do you want to run these queries now?', false)) {
+        if ($this->questionHelper->confirm('Do you want to run these queries now?', false)) {
             foreach ($queries as $query) {
                 $this->stdErr->write($query);
                 $host->runCommand($this->getMysqlCommand($database, $query));
@@ -166,8 +204,8 @@ class DbSizeCommand extends CommandBase
     /**
      * Shows a warning about schemas not accessible through this relationship.
      *
-     * @param \Platformsh\Client\Model\Deployment\Service $service
-     * @param array                                       $database
+     * @param Service $service
+     * @param array   $database
      *
      * @return void
      */
@@ -202,7 +240,7 @@ class DbSizeCommand extends CommandBase
             $this->stdErr->writeln('');
             $this->stdErr->writeln('<options=bold;fg=red>Warning</>');
             $this->stdErr->writeln('Databases tend to need extra space for starting up and temporary storage when running large queries.');
-            $this->stdErr->writeln(sprintf('Please increase the allocated space in %s', $this->config()->get('service.project_config_dir') . '/services.yaml'));
+            $this->stdErr->writeln(sprintf('Please increase the allocated space in %s', $this->config->get('service.project_config_dir') . '/services.yaml'));
         }
         $this->stdErr->writeln('');
         $this->stdErr->writeln('<options=bold;fg=yellow>Warning</>');
@@ -225,9 +263,7 @@ class DbSizeCommand extends CommandBase
         //but running both, and taking the average, gets us closer to the correct value
         $query = 'SELECT AVG(size) FROM (SELECT SUM(pg_database_size(t1.datname)) as size FROM pg_database t1 UNION SELECT SUM(pg_total_relation_size(pg_class.oid)) AS size FROM pg_class LEFT OUTER JOIN pg_namespace ON (pg_namespace.oid = pg_class.relnamespace)) x;';//too much
 
-        /** @var \Platformsh\Cli\Service\Relationships $relationships */
-        $relationships = $this->getService('relationships');
-        $dbUrl = $relationships->getDbCommandArgs('psql', $database, '');
+        $dbUrl = $this->relationships->getDbCommandArgs('psql', $database, '');
 
         return sprintf(
             "psql --echo-hidden -t --no-align %s -c '%s'",
@@ -245,9 +281,7 @@ class DbSizeCommand extends CommandBase
      * @return string
      */
     private function getMysqlCommand(array $database, $query) {
-        /** @var \Platformsh\Cli\Service\Relationships $relationships */
-        $relationships = $this->getService('relationships');
-        $connectionParams = $relationships->getDbCommandArgs('mysql', $database, '');
+        $connectionParams = $this->relationships->getDbCommandArgs('mysql', $database, '');
 
         return sprintf(
             "mysql %s --no-auto-rehash --raw --skip-column-names --execute '%s'",

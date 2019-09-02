@@ -1,23 +1,53 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Auth;
 
-use GuzzleHttp\Exception\BadResponseException;
+use Doctrine\Common\Cache\CacheProvider;
+use League\OAuth2\Client\Provider\Exception\IdentityProviderException;
 use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\Filesystem;
+use Platformsh\Cli\Service\QuestionHelper;
+use Platformsh\Oauth2\Client\Exception\TfaRequiredException;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Question\Question;
 
 class PasswordLoginCommand extends CommandBase
 {
+    protected static $defaultName = 'auth:password-login';
+
+    private $api;
+    private $cache;
+    private $config;
+    private $filesystem;
+    private $questionHelper;
+
+    public function __construct(
+        Api $api,
+        CacheProvider $cache,
+        Config $config,
+        Filesystem $filesystem,
+        QuestionHelper $questionHelper
+    )
+    {
+        $this->api = $api;
+        $this->cache = $cache;
+        $this->config = $config;
+        $this->filesystem = $filesystem;
+        $this->questionHelper = $questionHelper;
+        parent::__construct();
+    }
 
     protected function configure()
     {
-        $service = $this->config()->get('service.name');
-        $accountsUrl = $this->config()->get('service.accounts_url');
-        $executable = $this->config()->get('application.executable');
+        $service = $this->config->get('service.name');
+        $accountsUrl = $this->config->get('service.accounts_url');
+        $executable = $this->config->get('application.executable');
 
-        $this->setName('auth:password-login');
-        if ($this->config()->get('application.login_method') === 'password') {
+        if ($this->config->get('application.login_method') === 'password') {
             $this->setAliases(['login']);
         }
 
@@ -30,7 +60,7 @@ class PasswordLoginCommand extends CommandBase
             . $accountsUrl . '/user/password</info>'
             . "\n\nAlternatively, to log in to the CLI with a browser, run:\n    <info>"
             . $executable . ' auth:browser-login</info>';
-        if ($aHelp = $this->getApiTokenHelp()) {
+        if ($aHelp = $this->api->getApiTokenHelp()) {
             $help .= "\n\n" . $aHelp;
         }
         $this->setHelp($help);
@@ -38,29 +68,27 @@ class PasswordLoginCommand extends CommandBase
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        if ($this->api()->hasApiToken()) {
+        if ($this->api->hasApiToken()) {
             $this->stdErr->writeln('Cannot log in: an API token is set');
             return 1;
         }
         if (!$input->isInteractive()) {
             $this->stdErr->writeln('Non-interactive login is not supported.');
-            if ($aHelp = $this->getApiTokenHelp('comment')) {
+            if ($aHelp = $this->api->getApiTokenHelp('comment')) {
                 $this->stdErr->writeln("\n" . $aHelp);
             }
             return 1;
         }
 
         $this->stdErr->writeln(
-            'Please log in using your <info>' . $this->config()->get('service.name') . '</info> account.'
+            'Please log in using your <info>' . $this->config->get('service.name') . '</info> account.'
         );
         $this->stdErr->writeln('');
         $this->configureAccount($input, $this->stdErr);
 
-        /** @var \Doctrine\Common\Cache\CacheProvider $cache */
-        $cache = $this->getService('cache');
-        $cache->flushAll();
+        $this->cache->flushAll();
 
-        $info = $this->api()->getClient(false, true)->getAccountInfo();
+        $info = $this->api->getClient(false, true)->getAccountInfo();
         if (isset($info['username'], $info['mail'])) {
             $this->stdErr->writeln('');
             $this->stdErr->writeln(sprintf(
@@ -69,17 +97,20 @@ class PasswordLoginCommand extends CommandBase
                 $info['mail']
             ));
         }
+
+        return 0;
     }
 
+    /**
+     * @param \Symfony\Component\Console\Input\InputInterface   $input
+     * @param \Symfony\Component\Console\Output\OutputInterface $output
+     */
     protected function configureAccount(InputInterface $input, OutputInterface $output)
     {
-        /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-        $questionHelper = $this->getService('question_helper');
-
         $question = new Question('Your email address or username: ');
         $question->setValidator([$this, 'validateUsernameOrEmail']);
         $question->setMaxAttempts(5);
-        $email = $questionHelper->ask($input, $output, $question);
+        $email = $this->questionHelper->ask($input, $output, $question);
 
         $question = new Question('Your password: ');
         $question->setValidator(
@@ -94,57 +125,44 @@ class PasswordLoginCommand extends CommandBase
         $question->setHidden(true);
         $question->setHiddenFallback(false);
         $question->setMaxAttempts(5);
-        $password = $questionHelper->ask($input, $output, $question);
+        $password = $this->questionHelper->ask($input, $output, $question);
 
         try {
-            $this->api()->getClient(false)
+            $this->api->getClient(false)
                 ->getConnector()
                 ->logIn($email, $password, true);
-        } catch (BadResponseException $e) {
+        }
+        catch (TfaRequiredException $e) {
             // If a two-factor authentication challenge is received, then ask
             // the user for their TOTP code, and then retry logging in.
-            if ($e->getResponse()->getHeader('X-Drupal-TFA')) {
-                $question = new Question("Your application verification code: ");
-                $question->setValidator(function ($answer) use ($email, $password) {
-                    if (trim($answer) == '') {
-                        throw new \RuntimeException("The code cannot be empty.");
-                    }
-                    try {
-                        $this->api()->getClient(false)
-                            ->getConnector()
-                            ->logIn($email, $password, true, $answer);
-                    } catch (BadResponseException $e) {
-                        // If there is a two-factor authentication error, show
-                        // the error description that the server provides.
-                        //
-                        // A RuntimeException here causes the user to be asked
-                        // again for their TOTP code.
-                        if ($e->getResponse()->getHeader('X-Drupal-TFA')) {
-                            $json = $e->getResponse()->json();
-                            throw new \RuntimeException($json['error_description']);
-                        } else {
-                            throw $e;
-                        }
-                    }
+            $output->writeln("\nTwo-factor authentication is required.");
+            $question = new Question('Your application verification code: ');
+            $question->setValidator(function ($answer) use ($email, $password) {
+                if (trim($answer) == '') {
+                    throw new \RuntimeException('The code cannot be empty.');
+                }
+                $this->api->getClient(false)
+                    ->getConnector()
+                    ->logIn($email, $password, true, $answer);
 
-                    return $answer;
-                });
-                $question->setMaxAttempts(5);
-                $output->writeln("\nTwo-factor authentication is required.");
-                $questionHelper->ask($input, $output, $question);
-            } elseif ($e->getResponse()->getStatusCode() === 401) {
-                $output->writeln([
-                    '',
-                    '<error>Login failed. Please check your credentials.</error>',
-                    '',
-                    "Forgot your password? Or don't have a password yet? Visit:",
-                    '  <comment>' . $this->config()->get('service.accounts_url') . '/user/password</comment>',
-                    '',
-                ]);
-                $this->configureAccount($input, $output);
-            } else {
-                throw $e;
-            }
+                return $answer;
+            });
+            $question->setMaxAttempts(5);
+            $this->questionHelper->ask($input, $output, $question);
+        }
+        /** @noinspection PhpRedundantCatchClauseInspection */
+        catch (IdentityProviderException $e) {
+            $output->writeln([
+                '',
+                '<error>' . rtrim($e->getMessage(), '.') . '.</error>',
+                '',
+                'Login failed. Please try again.',
+                '',
+                "Forgot your password? Or don't have a password yet? Visit:",
+                '  <comment>' . $this->config->get('service.accounts_url') . '/user/password</comment>',
+                '',
+            ]);
+            $this->configureAccount($input, $output);
         }
     }
 

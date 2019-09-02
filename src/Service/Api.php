@@ -1,21 +1,22 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Service;
 
 use Doctrine\Common\Cache\CacheProvider;
 use GuzzleHttp\ClientInterface;
-use GuzzleHttp\Event\ErrorEvent;
 use Platformsh\Cli\Event\EnvironmentsChangedEvent;
 use Platformsh\Cli\Model\Route;
 use Platformsh\Cli\Session\KeychainStorage;
 use Platformsh\Cli\Util\NestedArrayUtil;
 use Platformsh\Client\Connection\Connector;
+use Platformsh\Client\Model\ApiResourceBase;
 use Platformsh\Client\Model\Deployment\EnvironmentDeployment;
 use Platformsh\Client\Model\Environment;
 use Platformsh\Client\Model\Project;
 use Platformsh\Client\Model\ProjectAccess;
-use Platformsh\Client\Model\Resource as ApiResource;
 use Platformsh\Client\PlatformClient;
+use Platformsh\Client\Session\Session;
 use Platformsh\Client\Session\Storage\File;
 use Symfony\Component\EventDispatcher\EventDispatcher;
 use Symfony\Component\EventDispatcher\EventDispatcherInterface;
@@ -64,21 +65,12 @@ class Api
     /** @var \Platformsh\Client\Session\Storage\SessionStorageInterface|null */
     protected $sessionStorage;
 
-    /**
-     * Constructor.
-     *
-     * @param Config|null                $config
-     * @param CacheProvider|null            $cache
-     * @param EventDispatcherInterface|null $dispatcher
-     */
     public function __construct(
-        Config $config = null,
-        CacheProvider $cache = null,
-        EventDispatcherInterface $dispatcher = null
+        ?Config $config = null,
+        ?CacheProvider $cache = null
     ) {
         $this->config = $config ?: new Config();
-        $this->dispatcher = $dispatcher ?: new EventDispatcher();
-
+        $this->dispatcher = new EventDispatcher();
         $this->cache = $cache ?: CacheFactory::createCacheProvider($this->config);
 
         $this->sessionId = $this->config->get('api.session_id') ?: 'default';
@@ -112,9 +104,34 @@ class Api
     }
 
     /**
+     * Sets up listeners (called by the DI container).
+     *
+     * @required
+     *
+     * @param \Platformsh\Cli\Service\AutoLoginListener $autoLoginListener
+     * @param \Platformsh\Cli\Service\DrushAliasUpdater $drushAliasUpdater
+     */
+    public function injectListeners(
+        AutoLoginListener $autoLoginListener,
+        DrushAliasUpdater $drushAliasUpdater
+    ): void
+    {
+        $this->dispatcher->addListener(
+            'login.required',
+            [$autoLoginListener, 'onLoginRequired']
+        );
+        $this->dispatcher->addListener(
+            'environments.changed',
+            [$drushAliasUpdater, 'onEnvironmentsChanged']
+        );
+    }
+
+    /**
+     * Get the cache object.
+     *
      * @return \Doctrine\Common\Cache\CacheProvider
      */
-    public function getCache()
+    public function getCache(): CacheProvider
     {
         return $this->cache;
     }
@@ -127,7 +144,7 @@ class Api
      *
      * @return string
      */
-    protected function loadTokenFromFile($filename)
+    protected function loadTokenFromFile(string $filename): string
     {
         if (strpos($filename, '/') !== 0 && strpos($filename, '\\') !== 0) {
             $filename = $this->config->getUserConfigDir() . '/' . $filename;
@@ -146,7 +163,7 @@ class Api
      *
      * @return bool
      */
-    public function hasApiToken()
+    public function hasApiToken(): bool
     {
         return isset($this->apiToken);
     }
@@ -156,7 +173,7 @@ class Api
      *
      * @return string
      */
-    protected function getUserAgent()
+    protected function getUserAgent(): string
     {
         return sprintf(
             '%s/%s (%s; %s; PHP %s)',
@@ -177,7 +194,7 @@ class Api
      *
      * @return PlatformClient
      */
-    public function getClient($autoLogin = true, $reset = false)
+    public function getClient(bool $autoLogin = true, bool $reset = false): PlatformClient
     {
         if (!isset(self::$client) || $reset) {
             $connectorOptions = [];
@@ -202,13 +219,10 @@ class Api
                 }
             }
 
-            $connector = new Connector($connectorOptions);
-
             // Set up a persistent session to store OAuth2 tokens. By default,
             // this will be stored in a JSON file:
             // $HOME/.platformsh/.session/sess-cli-default/sess-cli-default.json
-            $session = $connector->getSession();
-            $session->setId('cli-' . $this->sessionId);
+            $session = new Session('cli-' . $this->sessionId);
 
             $this->sessionStorage = KeychainStorage::isSupported()
                 && $this->config->isExperimentEnabled('use_keychain')
@@ -216,26 +230,12 @@ class Api
                 : new File($this->config->getSessionDir());
             $session->setStorage($this->sessionStorage);
 
-            // Ensure session data is (re-)loaded every time.
-            // @todo move this to the Session
-            if (!$session->getData()) {
-                $session->load(true);
-            }
+            $connector = new Connector($connectorOptions, $session);
 
             self::$client = new PlatformClient($connector);
 
             if ($autoLogin && !$connector->isLoggedIn()) {
-                $this->dispatcher->dispatch('login_required');
-            }
-
-            try {
-                $connector->getClient()->getEmitter()->on('error', function (ErrorEvent $event) {
-                    if ($event->getResponse() && $event->getResponse()->getStatusCode() === 403) {
-                        $this->on403($event);
-                    }
-                });
-            } catch (\RuntimeException $e) {
-                // Ignore errors if the user is not logged in at this stage.
+                $this->dispatcher->dispatch('login.required');
             }
         }
 
@@ -249,7 +249,7 @@ class Api
      *
      * @return Project[] The user's projects, keyed by project ID.
      */
-    public function getProjects($refresh = null)
+    public function getProjects(?bool $refresh = null)
     {
         $cacheKey = sprintf('%s:projects', $this->sessionId);
 
@@ -291,7 +291,7 @@ class Api
      *
      * @return Project|false
      */
-    public function getProject($id, $host = null, $refresh = null)
+    public function getProject(string $id, ?string $host = null, ?bool $refresh = null)
     {
         // Find the project in the user's main project list. This uses a
         // separate cache.
@@ -337,7 +337,7 @@ class Api
      *
      * @return Environment[] The user's environments, keyed by ID.
      */
-    public function getEnvironments(Project $project, $refresh = null, $events = true)
+    public function getEnvironments(Project $project, ?bool $refresh = null, ?bool $events = true): array
     {
         $projectId = $project->id;
 
@@ -361,7 +361,7 @@ class Api
             // Dispatch an event if the list of environments has changed.
             if ($events && (!$cached || array_diff_key($environments, $cached))) {
                 $this->dispatcher->dispatch(
-                    'environments_changed',
+                    'environments.changed',
                     new EnvironmentsChangedEvent($project, $environments)
                 );
             }
@@ -393,7 +393,7 @@ class Api
      *
      * @return Environment|false The environment, or false if not found.
      */
-    public function getEnvironment($id, Project $project, $refresh = null, $tryMachineName = false)
+    public function getEnvironment(string $id, Project $project, ?bool $refresh = null, ?bool $tryMachineName = false)
     {
         // Statically cache not found environments.
         $cacheKey = $project->id . ':' . $id . ($tryMachineName ? ':mn' : '');
@@ -441,7 +441,7 @@ class Api
      *   An array containing at least 'username', 'id', 'mail', and
      *   'display_name'.
      */
-    public function getMyAccount($reset = false)
+    public function getMyAccount(bool $reset = false): array
     {
         $cacheKey = sprintf('%s:my-account', $this->sessionId);
         if ($reset || !($info = $this->cache->fetch($cacheKey))) {
@@ -461,7 +461,7 @@ class Api
      * @return array
      *   An array containing 'email' and 'display_name'.
      */
-    public function getAccount(ProjectAccess $access, $reset = false)
+    public function getAccount(ProjectAccess $access, bool $reset = false): array
     {
         if (isset(self::$accountsCache[$access->id]) && !$reset) {
             return self::$accountsCache[$access->id];
@@ -491,7 +491,7 @@ class Api
      *
      * @param string $projectId
      */
-    public function clearEnvironmentsCache($projectId)
+    public function clearEnvironmentsCache(string $projectId): void
     {
         $this->cache->delete('environments:' . $projectId);
         unset(self::$environmentsCache[$projectId]);
@@ -505,7 +505,7 @@ class Api
     /**
      * Clear the projects cache.
      */
-    public function clearProjectsCache()
+    public function clearProjectsCache(): void
     {
         $this->cache->delete(sprintf('%s:projects', $this->sessionId));
         $this->cache->delete(sprintf('%s:my-account', $this->sessionId));
@@ -514,14 +514,14 @@ class Api
     /**
      * Sort resources.
      *
-     * @param ApiResource[] &$resources
+     * @param ApiResourceBase[] &$resources
      * @param string        $propertyPath
      *
-     * @return ApiResource[]
+     * @return ApiResourceBase[]
      */
-    public static function sortResources(array &$resources, $propertyPath)
+    public static function sortResources(array &$resources, string $propertyPath): array
     {
-        uasort($resources, function (ApiResource $a, ApiResource $b) use ($propertyPath) {
+        uasort($resources, function (ApiResourceBase $a, ApiResourceBase $b) use ($propertyPath) {
             $valueA = static::getNestedProperty($a, $propertyPath, false);
             $valueB = static::getNestedProperty($b, $propertyPath, false);
 
@@ -544,15 +544,15 @@ class Api
     /**
      * Get a nested property of a resource, via a dot-separated string path.
      *
-     * @param ApiResource $resource
-     * @param string      $propertyPath
-     * @param bool        $lazyLoad
+     * @param ApiResourceBase $resource
+     * @param string          $propertyPath
+     * @param bool            $lazyLoad
      *
      * @throws \InvalidArgumentException if the property is not found.
      *
      * @return mixed
      */
-    public static function getNestedProperty(ApiResource $resource, $propertyPath, $lazyLoad = true)
+    public static function getNestedProperty(ApiResourceBase $resource, string $propertyPath, bool $lazyLoad = true)
     {
         if (!strpos($propertyPath, '.')) {
             return $resource->getProperty($propertyPath, true, $lazyLoad);
@@ -579,7 +579,7 @@ class Api
     /**
      * @return bool
      */
-    public function isLoggedIn()
+    public function isLoggedIn(): bool
     {
         return $this->getClient(false)->getConnector()->isLoggedIn();
     }
@@ -592,7 +592,7 @@ class Api
      *
      * @return ProjectAccess[]
      */
-    public function getProjectAccesses(Project $project, $reset = false)
+    public function getProjectAccesses(Project $project, bool $reset = false): array
     {
         if ($reset || !isset(self::$projectAccessesCache[$project->id])) {
             self::$projectAccessesCache[$project->id] = $project->getUsers();
@@ -610,7 +610,7 @@ class Api
      *
      * @return ProjectAccess|false
      */
-    public function loadProjectAccessByEmail(Project $project, $email, $reset = false)
+    public function loadProjectAccessByEmail(Project $project, string $email, bool $reset = false)
     {
         foreach ($this->getProjectAccesses($project, $reset) as $user) {
             $account = $this->getAccount($user);
@@ -630,7 +630,7 @@ class Api
      *
      * @return string
      */
-    public function getProjectLabel(Project $project, $tag = 'info')
+    public function getProjectLabel(Project $project, $tag = 'info'): string
     {
         $title = $project->title;
         $pattern = strlen($title) > 0 ? '%2$s (%3$s)' : '%3$s';
@@ -665,21 +665,21 @@ class Api
     /**
      * Get a resource, matching on the beginning of the ID.
      *
-     * @param string        $id
-     * @param ApiResource[] $resources
-     * @param string        $name
+     * @param string            $id
+     * @param ApiResourceBase[] $resources
+     * @param string            $name
      *
-     * @return ApiResource
+     * @return ApiResourceBase
      *   The resource, if one (and only one) is matched.
      */
-    public function matchPartialId($id, array $resources, $name = 'Resource')
+    public function matchPartialId(string $id, array $resources, string $name = 'Resource'): ApiResourceBase
     {
-        $matched = array_filter($resources, function (ApiResource $resource) use ($id) {
+        $matched = array_filter($resources, function (ApiResourceBase $resource) use ($id) {
             return strpos($resource->getProperty('id'), $id) === 0;
         });
 
         if (count($matched) > 1) {
-            $matchedIds = array_map(function (ApiResource $resource) {
+            $matchedIds = array_map(function (ApiResourceBase $resource) {
                 return $resource->getProperty('id');
             }, $matched);
             throw new \InvalidArgumentException(sprintf(
@@ -700,15 +700,15 @@ class Api
      *
      * @return string
      */
-    public function getAccessToken()
+    public function getAccessToken(): string
     {
         $session = $this->getClient()->getConnector()->getSession();
-        $token = $session->get('accessToken');
+        $token = (string) $session->get('accessToken');
         $expires = $session->get('expires');
         if (!$token || $expires < time()) {
             // Force a connection to the API to ensure there is an access token.
             $this->getMyAccount(true);
-            if (!$token = $session->get('accessToken')) {
+            if (!$token = (string) $session->get('accessToken')) {
                 throw new \RuntimeException('No access token found');
             }
         }
@@ -724,7 +724,7 @@ class Api
      *
      * @return int
     */
-    public function urlSort($a, $b)
+    public function urlSort(string $a, string $b): int
     {
         $result = 0;
         foreach ([$a, $b] as $key => $url) {
@@ -742,7 +742,7 @@ class Api
      *
      * @return ClientInterface
      */
-    public function getHttpClient()
+    public function getHttpClient(): ClientInterface
     {
         return $this->getClient(false)->getConnector()->getClient();
     }
@@ -750,7 +750,7 @@ class Api
     /**
      * Delete all keychain keys.
      */
-    public function deleteFromKeychain()
+    public function deleteFromKeychain(): void
     {
         if ($this->sessionStorage instanceof KeychainStorage) {
             $this->sessionStorage->deleteAll();
@@ -765,7 +765,7 @@ class Api
      *
      * @return EnvironmentDeployment
      */
-    public function getCurrentDeployment(Environment $environment, $refresh = false)
+    public function getCurrentDeployment(Environment $environment, bool $refresh = false): EnvironmentDeployment
     {
         $cacheKey = implode(':', ['current-deployment', $environment->project, $environment->id, $environment->head_commit]);
         $data = $this->cache->fetch($cacheKey);
@@ -802,7 +802,7 @@ class Api
      *
      * @return string|null
      */
-    public function getDefaultEnvironmentId(array $environments)
+    public function getDefaultEnvironmentId(array $environments): ?string
     {
         // If there is only one environment, use that.
         if (count($environments) <= 1) {
@@ -838,7 +838,7 @@ class Api
      *
      * @return string|null
      */
-    public function getSiteUrl(Environment $environment, $appName, EnvironmentDeployment $deployment = null)
+    public function getSiteUrl(Environment $environment, string $appName, ?EnvironmentDeployment $deployment = null): ?string
     {
         $deployment = $deployment ?: $this->getCurrentDeployment($environment);
         $routes = Route::fromDeploymentApi($deployment->routes);
@@ -866,23 +866,19 @@ class Api
     }
 
     /**
-     * React on an API 403 request.
+     * Get help on how to use API tokens.
      *
-     * @param \GuzzleHttp\Event\ErrorEvent $event
+     * @param string $tag
+     *
+     * @return string|null
      */
-    private function on403(ErrorEvent $event)
+    public function getApiTokenHelp(string $tag = 'info'): ?string
     {
-        $url = $event->getRequest()->getUrl();
-        $path = parse_url($url, PHP_URL_PATH);
-        if ($path && strpos($path, '/api/projects/') === 0) {
-            // Clear the environments cache for environment request errors.
-            if (preg_match('#^/api/projects/([^/]+?)/environments/#', $path, $matches)) {
-                $this->clearEnvironmentsCache($matches[1]);
-            }
-            // Clear the projects cache for other project request errors.
-            if (preg_match('#^/api/projects/([^/]+?)[/$]/#', $path, $matches)) {
-                $this->clearProjectsCache();
-            }
+        if ($this->config->has('service.api_token_help_url')) {
+            return "To authenticate non-interactively using an API token, see:\n    <$tag>"
+                . $this->config->get('service.api_token_help_url') . "</$tag>";
         }
+
+        return null;
     }
 }

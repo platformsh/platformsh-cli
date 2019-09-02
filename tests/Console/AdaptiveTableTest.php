@@ -1,12 +1,14 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Tests;
 
+use PHPUnit\Framework\TestCase;
 use Platformsh\Cli\Console\AdaptiveTable;
 use Symfony\Component\Console\Helper\Helper;
 use Symfony\Component\Console\Output\BufferedOutput;
 
-class AdaptiveTableTest extends \PHPUnit_Framework_TestCase
+class AdaptiveTableTest extends TestCase
 {
     /**
      * Test that a wide table is adapted to a maximum width.

@@ -1,9 +1,17 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Command\Mount;
 
 use Platformsh\Cli\Command\CommandBase;
 use Platformsh\Cli\Local\LocalApplication;
+use Platformsh\Cli\Model\RemoteContainer\RemoteContainerInterface;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\Filesystem;
+use Platformsh\Cli\Service\Mount;
+use Platformsh\Cli\Service\QuestionHelper;
+use Platformsh\Cli\Service\Rsync;
+use Platformsh\Cli\Service\Selector;
 use Platformsh\Cli\Model\RemoteContainer\App;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -14,14 +22,38 @@ class MountDownloadCommand extends CommandBase
 {
     private $localApps;
 
+    protected static $defaultName = 'mount:download';
+
+    private $config;
+    private $filesystem;
+    private $mountService;
+    private $questionHelper;
+    private $rsync;
+    private $selector;
+
+    public function __construct(
+        Config $config,
+        Filesystem $filesystem,
+        Mount $mountService,
+        QuestionHelper $questionHelper,
+        Rsync $rsync,
+        Selector $selector
+    ) {
+        $this->config = $config;
+        $this->filesystem = $filesystem;
+        $this->mountService = $mountService;
+        $this->questionHelper = $questionHelper;
+        $this->rsync = $rsync;
+        $this->selector = $selector;
+        parent::__construct();
+    }
+
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('mount:download')
-            ->setDescription('Download files from a mount, using rsync')
+        $this->setDescription('Download files from a mount, using rsync')
             ->addOption('all', 'a', InputOption::VALUE_NONE, 'Download from all mounts')
             ->addOption('mount', 'm', InputOption::VALUE_REQUIRED, 'The mount (as an app-relative path)')
             ->addOption('target', null, InputOption::VALUE_REQUIRED, 'The directory to which files will be downloaded. If --all is used, the mount path will be appended')
@@ -30,9 +62,8 @@ class MountDownloadCommand extends CommandBase
             ->addOption('exclude', null, InputOption::VALUE_IS_ARRAY|InputOption::VALUE_REQUIRED, 'File(s) to exclude from the download (pattern)')
             ->addOption('include', null, InputOption::VALUE_IS_ARRAY|InputOption::VALUE_REQUIRED, 'File(s) to include in the download (pattern)')
             ->addOption('refresh', null, InputOption::VALUE_NONE, 'Whether to refresh the cache');
-        $this->addProjectOption();
-        $this->addEnvironmentOption();
-        $this->addRemoteContainerOptions();
+
+        $this->selector->addAllOptions($this->getDefinition(), false);
     }
 
     /**
@@ -40,10 +71,7 @@ class MountDownloadCommand extends CommandBase
      */
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
-
-        /** @var App $container */
-        $container = $this->selectRemoteContainer($input);
+        $container = $this->selector->getSelection($input)->getRemoteContainer();
         $mounts = $container->getMounts();
 
         if (empty($mounts)) {
@@ -51,14 +79,8 @@ class MountDownloadCommand extends CommandBase
 
             return 1;
         }
-        /** @var \Platformsh\Cli\Service\Mount $mountService */
-        $mountService = $this->getService('mount');
-        $mounts = $mountService->normalizeMounts($mounts);
 
-        /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-        $questionHelper = $this->getService('question_helper');
-        /** @var \Platformsh\Cli\Service\Filesystem $fs */
-        $fs = $this->getService('fs');
+        $mounts = $this->mountService->normalizeMounts($mounts);
 
         $all = $input->getOption('all');
 
@@ -69,7 +91,7 @@ class MountDownloadCommand extends CommandBase
                 return 1;
             }
 
-            $mountPath = $mountService->matchMountPath($input->getOption('mount'), $mounts);
+            $mountPath = $this->mountService->matchMountPath($input->getOption('mount'), $mounts);
         } elseif (!$all && $input->isInteractive()) {
             $mountOptions = [];
             foreach ($mounts as $path => $definition) {
@@ -81,7 +103,7 @@ class MountDownloadCommand extends CommandBase
             }
             $mountOptions['\\ALL'] = 'All mounts';
 
-            $choice = $questionHelper->choose(
+            $choice = $this->questionHelper->choose(
                 $mountOptions,
                 'Enter a number to choose a mount to download from:'
             );
@@ -98,19 +120,18 @@ class MountDownloadCommand extends CommandBase
 
         $target = null;
         if ($input->getOption('target')) {
-            $target = $input->getOption('target');
+            $target = (string) $input->getOption('target');
         }
 
         if (empty($target) && $input->isInteractive()) {
             $questionText = 'Target directory';
             $defaultTarget = isset($mountPath) ? $this->getDefaultTarget($container, $mountPath) : '.';
             if ($defaultTarget !== null) {
-                $formattedDefaultTarget = $fs->formatPathForDisplay($defaultTarget);
+                $formattedDefaultTarget = $this->filesystem->formatPathForDisplay($defaultTarget);
                 $questionText .= ' <question>[' . $formattedDefaultTarget . ']</question>';
             }
             $questionText .= ': ';
-            $target = $questionHelper->ask($input, $this->stdErr, new Question($questionText, $defaultTarget));
-            $this->stdErr->writeln('');
+            $target = $this->questionHelper->ask($input, $this->stdErr, new Question($questionText, $defaultTarget));
         }
 
         if (empty($target)) {
@@ -122,16 +143,13 @@ class MountDownloadCommand extends CommandBase
         if (!file_exists($target)) {
             // Allow rsync to create the target directory if it doesn't
             // already exist.
-            if (!$questionHelper->confirm(sprintf('Directory not found: <comment>%s</comment>. Do you want to create it?', $target))) {
+            if (!$this->questionHelper->confirm(sprintf('Directory not found: <comment>%s</comment>. Do you want to create it?', $target))) {
                 return 1;
             }
             $this->stdErr->writeln('');
         } else {
-            $fs->validateDirectory($target, true);
+            $this->filesystem->validateDirectory($target, true);
         }
-
-        /** @var \Platformsh\Cli\Service\Rsync $rsync */
-        $rsync = $this->getService('rsync');
 
         $rsyncOptions = [
             'delete' => $input->getOption('delete'),
@@ -140,15 +158,16 @@ class MountDownloadCommand extends CommandBase
             'verbose' => $output->isVeryVerbose(),
             'quiet' => $output->isQuiet(),
         ];
+
         $sshUrl = $container->getSshUrl();
 
         if ($all) {
             $confirmText = sprintf(
                 'Downloading files from all remote mounts to <comment>%s</comment>'
                 . "\n\nAre you sure you want to continue?",
-                $fs->formatPathForDisplay($target)
+                $this->filesystem->formatPathForDisplay($target)
             );
-            if (!$questionHelper->confirm($confirmText)) {
+            if (!$this->questionHelper->confirm($confirmText)) {
                 return 1;
             }
 
@@ -167,24 +186,24 @@ class MountDownloadCommand extends CommandBase
                 $this->stdErr->writeln(sprintf(
                     'Downloading files from <comment>%s</comment> to <comment>%s</comment>',
                     $mountPath,
-                    $fs->formatPathForDisplay($mountSpecificTarget)
+                    $this->filesystem->formatPathForDisplay($mountSpecificTarget)
                 ));
-                $fs->mkdir($mountSpecificTarget);
-                $rsync->syncDown($sshUrl, $mountPath, $mountSpecificTarget, $rsyncOptions);
+                $this->filesystem->mkdir($mountSpecificTarget);
+                $this->rsync->syncDown($sshUrl, $mountPath, $mountSpecificTarget, $rsyncOptions);
             }
         } elseif (isset($mountPath)) {
             $confirmText = sprintf(
                 'Downloading files from the remote mount <comment>%s</comment> to <comment>%s</comment>'
                 . "\n\nAre you sure you want to continue?",
                 $mountPath,
-                $fs->formatPathForDisplay($target)
+                $this->filesystem->formatPathForDisplay($target)
             );
-            if (!$questionHelper->confirm($confirmText)) {
+            if (!$this->questionHelper->confirm($confirmText)) {
                 return 1;
             }
 
             $this->stdErr->writeln('');
-            $rsync->syncDown($sshUrl, $mountPath, $target, $rsyncOptions);
+            $this->rsync->syncDown($sshUrl, $mountPath, $target, $rsyncOptions);
         } else {
             throw new \LogicException('Mount path not defined');
         }
@@ -193,24 +212,23 @@ class MountDownloadCommand extends CommandBase
     }
 
     /**
-     * @param \Platformsh\Cli\Model\RemoteContainer\App $app
-     * @param string                                    $mountPath
+     * @param RemoteContainerInterface $container
+     * @param string                   $mountPath
      *
      * @return string|null
      */
-    private function getDefaultTarget(App $app, $mountPath)
+    private function getDefaultTarget(RemoteContainerInterface $container, $mountPath): ?string
     {
-        /** @var \Platformsh\Cli\Service\Mount $mountService */
-        $mountService = $this->getService('mount');
-
-        $appPath = $this->getLocalAppPath($app);
-        if ($appPath !== null && is_dir($appPath . '/' . $mountPath)) {
-            return $appPath . '/' . $mountPath;
+        if ($container instanceof App) {
+            $appPath = $this->getLocalAppPath($container);
+            if ($appPath !== null && is_dir($appPath . '/' . $mountPath)) {
+                return $appPath . '/' . $mountPath;
+            }
         }
 
-        $sharedMounts = $mountService->getSharedFileMounts($app->getMounts());
-        if (isset($sharedMounts[$mountPath])) {
-            $sharedDir = $this->getSharedDir($app);
+        $sharedMounts = $this->mountService->getSharedFileMounts($container->getMounts());
+        if (isset($sharedMounts[$mountPath]) && $container instanceof App) {
+            $sharedDir = $this->getSharedDir($container);
             if ($sharedDir !== null && file_exists($sharedDir . '/' . $sharedMounts[$mountPath])) {
                 return $sharedDir . '/' . $sharedMounts[$mountPath];
             }
@@ -222,12 +240,12 @@ class MountDownloadCommand extends CommandBase
     /**
      * @return LocalApplication[]
      */
-    private function getLocalApps()
+    private function getLocalApps(): array
     {
         if (!isset($this->localApps)) {
             $this->localApps = [];
-            if ($projectRoot = $this->getProjectRoot()) {
-                $this->localApps = LocalApplication::getApplications($projectRoot, $this->config());
+            if ($projectRoot = $this->selector->getProjectRoot()) {
+                $this->localApps = LocalApplication::getApplications($projectRoot, $this->config);
             }
         }
 
@@ -241,7 +259,7 @@ class MountDownloadCommand extends CommandBase
      *
      * @return string|null
      */
-    private function getLocalAppPath(App $app)
+    private function getLocalAppPath(App $app): ?string
     {
         foreach ($this->getLocalApps() as $path => $candidateApp) {
             if ($candidateApp->getName() === $app->getName()) {
@@ -253,19 +271,19 @@ class MountDownloadCommand extends CommandBase
     }
 
     /**
-     * @param \Platformsh\Cli\Model\RemoteContainer\App $app
+     * @param App $app
      *
      * @return string|null
      */
-    private function getSharedDir(App $app)
+    private function getSharedDir(App $app): ?string
     {
-        $projectRoot = $this->getProjectRoot();
+        $projectRoot = $this->selector->getProjectRoot();
         if (!$projectRoot) {
             return null;
         }
 
         $localApps = $this->getLocalApps();
-        $dirname =  $projectRoot . '/' . $this->config()->get('local.shared_dir');
+        $dirname =  $projectRoot . '/' . $this->config->get('local.shared_dir');
         if (count($localApps) > 1 && is_dir($dirname)) {
             $dirname .= $app->getName();
         }

@@ -2,15 +2,12 @@
   "chmod": "0755",
   "directories": [
     "bin",
+    "config",
     "resources",
     "src"
   ],
   "files": [
-    "config.yaml",
     "constants.php",
-    "services.yaml",
-    "shell-config.rc",
-    "shell-config-bash.rc",
     "vendor/autoload.php",
     "vendor/symfony/console/Resources/bin/hiddeninput.exe"
   ],
@@ -27,7 +24,7 @@
   ],
   "main": "bin/platform",
   "output": "platform.phar",
-  "stub": "stub.php",
+  "stub": "resources/phar-stub.php",
   "compactors": [
       "KevinGH\\Box\\Compactor\\Json",
       "KevinGH\\Box\\Compactor\\Php"

@@ -1,23 +1,47 @@
 <?php
 namespace Platformsh\Cli\Command\Integration;
 
+use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\IntegrationService;
+use Platformsh\Cli\Service\QuestionHelper;
+use Platformsh\Cli\Service\Selector;
 use Platformsh\Client\Exception\OperationUnavailableException;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
-class IntegrationValidateCommand extends IntegrationCommandBase
+class IntegrationValidateCommand extends CommandBase
 {
+    public static $defaultName = 'integration:validate';
+
+    private $api;
+    private $integrationService;
+    private $questionHelper;
+    private $selector;
+
+    public function __construct(
+        Api $api,
+        IntegrationService $integrationService,
+        QuestionHelper $questionHelper,
+        Selector $selector
+    ) {
+        $this->api = $api;
+        $this->integrationService = $integrationService;
+        $this->questionHelper = $questionHelper;
+        $this->selector = $selector;
+        parent::__construct();
+    }
+
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
         $this
-            ->setName('integration:validate')
             ->addArgument('id', InputArgument::OPTIONAL, 'An integration ID. Leave blank to choose from a list.')
             ->setDescription('Validate an existing integration');
-        $this->addProjectOption();
+        $this->selector->addProjectOption($this->getDefinition());
         $this->setHelp(<<<EOF
 This command allows you to check whether an integration is valid.
 
@@ -34,9 +58,7 @@ EOF
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
-
-        $project = $this->getSelectedProject();
+        $project = $this->selector->getSelection($input)->getProject();
 
         $id = $input->getArgument('id');
         if (!$id && !$input->isInteractive()) {
@@ -50,19 +72,17 @@ EOF
 
                 return 1;
             }
-            /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-            $questionHelper = $this->getService('question_helper');
             $choices = [];
             foreach ($integrations as $integration) {
                 $choices[$integration->id] = sprintf('%s (%s)', $integration->id, $integration->type);
             }
-            $id = $questionHelper->choose($choices, 'Enter a number to choose an integration:');
+            $id = $this->questionHelper->choose($choices, 'Enter a number to choose an integration:');
         }
 
         $integration = $project->getIntegration($id);
         if (!$integration) {
             try {
-                $integration = $this->api()->matchPartialId($id, $project->getIntegrations(), 'Integration');
+                $integration = $this->api->matchPartialId($id, $project->getIntegrations(), 'Integration');
             } catch (\InvalidArgumentException $e) {
                 $this->stdErr->writeln($e->getMessage());
                 return 1;
@@ -90,7 +110,7 @@ EOF
 
         $this->stdErr->writeln('');
 
-        $this->listValidationErrors($errors, $output);
+        $this->integrationService->listValidationErrors($errors, $output);
 
         // The exit code for an invalid integration (see the command help).
         return 4;

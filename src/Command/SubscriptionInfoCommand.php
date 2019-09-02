@@ -1,9 +1,13 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Command;
 
 use Platformsh\Cli\Console\AdaptiveTableCell;
+use Platformsh\Cli\Service\Api;
 use Platformsh\Cli\Service\PropertyFormatter;
+use Platformsh\Cli\Service\QuestionHelper;
+use Platformsh\Cli\Service\Selector;
 use Platformsh\Cli\Service\Table;
 use Platformsh\Client\Model\Subscription;
 use Symfony\Component\Console\Input\InputArgument;
@@ -13,25 +17,45 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class SubscriptionInfoCommand extends CommandBase
 {
-    protected $hiddenInList = true;
+    protected static $defaultName = 'subscription:info';
 
-    /** @var \Platformsh\Cli\Service\PropertyFormatter|null */
-    protected $formatter;
+    private $api;
+    private $formatter;
+    private $questionHelper;
+    private $selector;
+    private $table;
+
+    public function __construct(
+        Api $api,
+        PropertyFormatter $formatter,
+        QuestionHelper $questionHelper,
+        Selector $selector,
+        Table $table
+    ) {
+        $this->api = $api;
+        $this->formatter = $formatter;
+        $this->questionHelper = $questionHelper;
+        $this->selector = $selector;
+        $this->table = $table;
+        parent::__construct();
+    }
 
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('subscription:info')
-            ->addArgument('property', InputArgument::OPTIONAL, 'The name of the property')
+        $this->addArgument('property', InputArgument::OPTIONAL, 'The name of the property')
             ->addArgument('value', InputArgument::OPTIONAL, 'Set a new value for the property')
             ->addOption('id', 's', InputOption::VALUE_REQUIRED, 'The subscription ID')
             ->setDescription('Read or modify subscription properties');
-        PropertyFormatter::configureInput($this->getDefinition());
-        Table::configureInput($this->getDefinition());
-        $this->addProjectOption();
+        $this->setHidden(true);
+
+        $definition = $this->getDefinition();
+        $this->formatter->configureInput($definition);
+        $this->table->configureInput($definition);
+        $this->selector->addProjectOption($definition);
+
         $this->addExample('View all subscription properties')
              ->addExample('View the subscription status', 'status')
              ->addExample('View the storage limit (in MiB)', 'storage');
@@ -41,20 +65,18 @@ class SubscriptionInfoCommand extends CommandBase
     {
         $id = $input->getOption('id');
         if (empty($id)) {
-            $this->validateInput($input);
-            $project = $this->getSelectedProject();
+            $selection = $this->selector->getSelection($input);
+            $project = $selection->getProject();
             $id = $project->getSubscriptionId();
         }
 
-        $subscription = $this->api()->getClient()
+        $subscription = $this->api->getClient()
                              ->getSubscription($id);
         if (!$subscription) {
             $this->stdErr->writeln(sprintf('Subscription not found: <error>%s</error>', $id));
 
             return 1;
         }
-        $this->formatter = $this->getService('property_formatter');
-
         $property = $input->getArgument('property');
 
         if (!$property) {
@@ -72,10 +94,10 @@ class SubscriptionInfoCommand extends CommandBase
                 break;
 
             default:
-                $value = $this->api()->getNestedProperty($subscription, $property);
+                $value = $this->api->getNestedProperty($subscription, $property);
         }
 
-        $output->writeln($this->formatter->format($value, $property));
+        $output->write($this->formatter->format($value, $property));
 
         return 0;
     }
@@ -93,9 +115,7 @@ class SubscriptionInfoCommand extends CommandBase
             $headings[] = new AdaptiveTableCell($key, ['wrap' => false]);
             $values[] = $this->formatter->format($value, $key);
         }
-        /** @var \Platformsh\Cli\Service\Table $table */
-        $table = $this->getService('table');
-        $table->renderSimple($values, $headings);
+        $this->table->renderSimple($values, $headings);
 
         return 0;
     }
@@ -127,8 +147,6 @@ class SubscriptionInfoCommand extends CommandBase
             return 0;
         }
 
-        /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-        $questionHelper = $this->getService('question_helper');
         $confirmMessage = sprintf(
             "Are you sure you want to change property '%s' from <comment>%s</comment> to <comment>%s</comment>?",
             $property,
@@ -140,7 +158,7 @@ class SubscriptionInfoCommand extends CommandBase
             is_numeric($value) && $value > $currentValue ? 'increase' : 'change'
         );
         $confirmMessage = $warning . "\n" . $confirmMessage;
-        if (!$questionHelper->confirm($confirmMessage)) {
+        if (!$this->questionHelper->confirm($confirmMessage)) {
             return 1;
         }
 

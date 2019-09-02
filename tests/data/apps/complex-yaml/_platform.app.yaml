@@ -1,1 +1,1 @@
-!include complex-app.yaml
+definition: !include complex-app.yaml

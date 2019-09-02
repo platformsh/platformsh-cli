@@ -1,24 +1,50 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Environment;
 
 use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\ActivityService;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\QuestionHelper;
+use Platformsh\Cli\Service\Selector;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
 class EnvironmentMergeCommand extends CommandBase
 {
+    protected static $defaultName = 'environment:merge';
+
+    private $api;
+    private $activityService;
+    private $questionHelper;
+    private $selector;
+
+    public function __construct(
+        Api $api,
+        ActivityService $activityService,
+        QuestionHelper $questionHelper,
+        Selector $selector
+    ) {
+        $this->api = $api;
+        $this->activityService = $activityService;
+        $this->questionHelper = $questionHelper;
+        $this->selector = $selector;
+        parent::__construct();
+    }
 
     protected function configure()
     {
-        $this
-            ->setName('environment:merge')
-            ->setAliases(['merge'])
+        $this->setAliases(['merge'])
             ->setDescription('Merge an environment')
             ->addArgument('environment', InputArgument::OPTIONAL, 'The environment to merge');
-        $this->addProjectOption()
-             ->addEnvironmentOption()
-             ->addWaitOptions();
+
+        $definition = $this->getDefinition();
+        $this->selector->addEnvironmentOption($definition);
+        $this->selector->addProjectOption($definition);
+        $this->activityService->configureInput($definition);
+
         $this->addExample('Merge the environment "sprint-2" into its parent', 'sprint-2');
         $this->setHelp(
             'This command will initiate a Git merge of the specified environment into its parent environment.'
@@ -27,9 +53,7 @@ class EnvironmentMergeCommand extends CommandBase
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
-
-        $selectedEnvironment = $this->getSelectedEnvironment();
+        $selectedEnvironment = $this->selector->getSelection($input)->getEnvironment();
         $environmentId = $selectedEnvironment->id;
 
         if (!$selectedEnvironment->operationAvailable('merge', true)) {
@@ -54,9 +78,7 @@ class EnvironmentMergeCommand extends CommandBase
             $environmentId,
             $parentId
         );
-        /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-        $questionHelper = $this->getService('question_helper');
-        if (!$questionHelper->confirm($confirmText)) {
+        if (!$this->questionHelper->confirm($confirmText)) {
             return 1;
         }
 
@@ -66,13 +88,11 @@ class EnvironmentMergeCommand extends CommandBase
             $parentId
         ));
 
-        $this->api()->clearEnvironmentsCache($selectedEnvironment->project);
+        $this->api->clearEnvironmentsCache($selectedEnvironment->project);
 
         $activity = $selectedEnvironment->merge();
-        if ($this->shouldWait($input)) {
-            /** @var \Platformsh\Cli\Service\ActivityMonitor $activityMonitor */
-            $activityMonitor = $this->getService('activity_monitor');
-            $success = $activityMonitor->waitAndLog(
+        if ($this->activityService->shouldWait($input)) {
+            $success = $this->activityService->waitAndLog(
                 $activity,
                 'Merge complete',
                 'Merge failed'

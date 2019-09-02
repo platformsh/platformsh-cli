@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Service;
 
@@ -29,7 +30,7 @@ class PropertyFormatter implements InputConfiguringInterface
      *
      * @return string
      */
-    public function format($value, $property = null)
+    public function format($value, ?string $property = null): string
     {
         if ($value === null) {
             return '';
@@ -71,7 +72,9 @@ class PropertyFormatter implements InputConfiguringInterface
                 }
         }
 
-        if (!is_string($value)) {
+        if ($value === null) {
+            $value = '';
+        } elseif (!is_string($value)) {
             $value = rtrim(Yaml::dump($value, 2));
         }
 
@@ -83,7 +86,7 @@ class PropertyFormatter implements InputConfiguringInterface
      *
      * @param InputDefinition $definition
      */
-    public static function configureInput(InputDefinition $definition)
+    public function configureInput(InputDefinition $definition): void
     {
         $definition->addOption(new InputOption(
             'date-fmt',
@@ -100,7 +103,7 @@ class PropertyFormatter implements InputConfiguringInterface
      *
      * @return string|null
      */
-    protected function formatDate($value)
+    protected function formatDate(string $value): ?string
     {
         $format = null;
         if (isset($this->input) && $this->input->hasOption('date-fmt')) {
@@ -126,7 +129,7 @@ class PropertyFormatter implements InputConfiguringInterface
      *
      * @return string
      */
-    protected function formatHttpAccess($httpAccess)
+    protected function formatHttpAccess($httpAccess): string
     {
         $info = (array) $httpAccess;
         $info += [
@@ -150,7 +153,7 @@ class PropertyFormatter implements InputConfiguringInterface
      * @param string|null     $property   The property of the data to display
      *                                    (a dot-separated string).
      */
-    public function displayData(OutputInterface $output, array $data, $property = null)
+    public function displayData(OutputInterface $output, array $data, ?string $property = null): void
     {
         $key = null;
 
@@ -168,7 +171,7 @@ class PropertyFormatter implements InputConfiguringInterface
         } elseif (!is_string($data)) {
             $output->write(Yaml::dump($data, 5, 4, Yaml::DUMP_MULTI_LINE_LITERAL_BLOCK));
         } else {
-            $output->writeln($this->format($data, $key));
+            $output->write($this->format($data, $key));
         }
     }
 }

@@ -1,33 +1,65 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Integration;
 
+use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\IntegrationService;
+use Platformsh\Cli\Service\PropertyFormatter;
+use Platformsh\Cli\Service\QuestionHelper;
+use Platformsh\Cli\Service\Selector;
 use Platformsh\Cli\Service\Table;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
-class IntegrationGetCommand extends IntegrationCommandBase
+class IntegrationGetCommand extends CommandBase
 {
+    protected static $defaultName = 'integration:get';
+
+    private $api;
+    private $formatter;
+    private $integrationService;
+    private $questionHelper;
+    private $selector;
+    private $table;
+
+    public function __construct(
+        Api $api,
+        IntegrationService $integrationService,
+        PropertyFormatter $formatter,
+        QuestionHelper $questionHelper,
+        Selector $selector,
+        Table $table
+    ) {
+        $this->api = $api;
+        $this->formatter = $formatter;
+        $this->integrationService = $integrationService;
+        $this->questionHelper = $questionHelper;
+        $this->selector = $selector;
+        $this->table = $table;
+        parent::__construct();
+    }
+
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('integration:get')
-            ->addArgument('id', InputArgument::OPTIONAL, 'An integration ID. Leave blank to choose from a list.')
+        $this->addArgument('id', InputArgument::OPTIONAL, 'An integration ID. Leave blank to choose from a list.')
             ->addOption('property', 'P', InputOption::VALUE_OPTIONAL, 'The integration property to view')
             ->setDescription('View details of an integration');
-        Table::configureInput($this->getDefinition());
-        $this->addProjectOption();
+
+        $definition = $this->getDefinition();
+        $this->selector->addProjectOption($definition);
+        $this->table->configureInput($definition);
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
-
-        $project = $this->getSelectedProject();
+        $project = $this->selector->getSelection($input)->getProject();
 
         $id = $input->getArgument('id');
         if (!$id && !$input->isInteractive()) {
@@ -41,19 +73,17 @@ class IntegrationGetCommand extends IntegrationCommandBase
 
                 return 1;
             }
-            /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-            $questionHelper = $this->getService('question_helper');
             $choices = [];
             foreach ($integrations as $integration) {
                 $choices[$integration->id] = sprintf('%s (%s)', $integration->id, $integration->type);
             }
-            $id = $questionHelper->choose($choices, 'Enter a number to choose an integration:');
+            $id = $this->questionHelper->choose($choices, 'Enter a number to choose an integration:');
         }
 
         $integration = $project->getIntegration($id);
         if (!$integration) {
             try {
-                $integration = $this->api()->matchPartialId($id, $project->getIntegrations(), 'Integration');
+                $integration = $this->api->matchPartialId($id, $project->getIntegrations(), 'Integration');
             } catch (\InvalidArgumentException $e) {
                 $this->stdErr->writeln($e->getMessage());
                 return 1;
@@ -64,17 +94,15 @@ class IntegrationGetCommand extends IntegrationCommandBase
             if ($property === 'hook_url' && $integration->hasLink('#hook')) {
                 $value = $integration->getLink('#hook');
             } else {
-                $value = $this->api()->getNestedProperty($integration, $property);
+                $value = $this->api->getNestedProperty($integration, $property);
             }
 
-            /** @var \Platformsh\Cli\Service\PropertyFormatter $formatter */
-            $formatter = $this->getService('property_formatter');
-            $output->writeln($formatter->format($value, $property));
+            $output->writeln($this->formatter->format($value, $property));
 
             return 0;
         }
 
-        $this->displayIntegration($integration);
+        $this->integrationService->displayIntegration($integration);
 
         return 0;
     }

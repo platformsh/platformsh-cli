@@ -1,10 +1,13 @@
 <?php
-namespace Platformsh\Cli\Command\Integration;
+declare(strict_types=1);
 
+namespace Platformsh\Cli\Service;
+
+use GuzzleHttp\Exception\GuzzleException;
+use function GuzzleHttp\json_decode;
 use GuzzleHttp\Exception\BadResponseException;
-use GuzzleHttp\Exception\TransferException;
-use Platformsh\Cli\Command\CommandBase;
 use Platformsh\Client\Model\Integration;
+use Platformsh\Client\Model\Project;
 use Platformsh\ConsoleForm\Field\ArrayField;
 use Platformsh\ConsoleForm\Field\BooleanField;
 use Platformsh\ConsoleForm\Field\EmailAddressField;
@@ -12,20 +15,41 @@ use Platformsh\ConsoleForm\Field\Field;
 use Platformsh\ConsoleForm\Field\OptionsField;
 use Platformsh\ConsoleForm\Field\UrlField;
 use Platformsh\ConsoleForm\Form;
+use Symfony\Component\Console\Output\ConsoleOutputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
-abstract class IntegrationCommandBase extends CommandBase
+class IntegrationService
 {
-    /** @var Form */
+    /** @var \Platformsh\ConsoleForm\Form */
     private $form;
+
+    private $api;
+    private $config;
+    private $formatter;
+    private $stdErr;
+    private $table;
 
     /** @var array */
     private $bitbucketAccessTokens = [];
 
+    public function __construct(
+        Api $api,
+        Config $config,
+        OutputInterface $output,
+        PropertyFormatter $formatter,
+        Table $table
+    ) {
+        $this->api = $api;
+        $this->config = $config;
+        $this->formatter = $formatter;
+        $this->stdErr = $output instanceof ConsoleOutputInterface ? $output->getErrorOutput() : $output;
+        $this->table = $table;
+    }
+
     /**
      * @return Form
      */
-    protected function getForm()
+    public function getForm()
     {
         if (!isset($this->form)) {
             $this->form = Form::fromArray($this->getFields());
@@ -42,7 +66,7 @@ abstract class IntegrationCommandBase extends CommandBase
      *
      * @return array
      */
-    protected function postProcessValues(array $values, Integration $integration = null)
+    public function postProcessValues(array $values, Integration $integration = null)
     {
         // Find the integration type.
         $type = isset($values['type'])
@@ -290,7 +314,7 @@ abstract class IntegrationCommandBase extends CommandBase
                     'health.email',
                 ]],
                 'description' => 'The From address for alert emails',
-                'default' => $this->config()->getWithDefault('service.default_from_address', null),
+                'default' => $this->config->getWithDefault('service.default_from_address', null),
             ]),
             'recipients' => new ArrayField('Recipients', [
                 'conditions' => ['type' => [
@@ -324,9 +348,10 @@ abstract class IntegrationCommandBase extends CommandBase
     }
 
     /**
-     * @param \Platformsh\Client\Model\Integration $integration
+     * @param Integration $integration
+     * @param Project     $project
      */
-    protected function ensureHooks(Integration $integration)
+    public function ensureHooks(Integration $integration, Project $project)
     {
         if ($integration->type === 'github') {
             $hooksApiUrl = sprintf('https://api.github.com/repos/%s/hooks', $integration->getProperty('repository'));
@@ -383,8 +408,8 @@ abstract class IntegrationCommandBase extends CommandBase
             $payload = [
                 'description' => sprintf(
                     '%s: %s',
-                    $this->config()->get('service.name'),
-                    $this->getSelectedProject()->id
+                    $this->config->get('service.name'),
+                    $project->id
                 ),
                 'url' => $integration->getLink('#hook'),
                 'active' => true,
@@ -402,7 +427,7 @@ abstract class IntegrationCommandBase extends CommandBase
             return;
         }
 
-        $client = $this->api()->getHttpClient();
+        $client = $this->api->getHttpClient();
 
         $this->stdErr->writeln(sprintf(
             'Checking webhook configuration on the repository: <info>%s</info>',
@@ -410,11 +435,11 @@ abstract class IntegrationCommandBase extends CommandBase
         ));
 
         try {
-            $hooks = $client->get($hooksApiUrl, $requestOptions)->json();
+            $hooks = json_decode($client->request('get', $hooksApiUrl, $requestOptions)->getBody()->getContents(), true);
             $hook = $this->findWebHook($integration, $hooks);
             if (!$hook) {
                 $this->stdErr->writeln('  Creating new webhook');
-                $client->post($hooksApiUrl, ['json' => $payload] + $requestOptions);
+                $client->request('post', $hooksApiUrl, ['json' => $payload] + $requestOptions);
                 $this->stdErr->writeln('  Webhook created successfully');
             }
             elseif ($this->hookNeedsUpdate($integration, $hook, $payload)) {
@@ -428,15 +453,13 @@ abstract class IntegrationCommandBase extends CommandBase
                 $hookApiUrl = $hooksApiUrl . '/' . rawurlencode($id);
 
                 $this->stdErr->writeln('  Updating webhook');
-                $client->send(
-                    $client->createRequest($method, $hookApiUrl, ['json' => $payload] + $requestOptions)
-                );
+                $client->request($method, $hookApiUrl, ['json' => $payload] + $requestOptions);
                 $this->stdErr->writeln('  Webhook updated successfully');
             }
             else {
                 $this->stdErr->writeln('  Valid configuration found');
             }
-        } catch (TransferException $e) {
+        } catch (GuzzleException $e) {
             $this->stdErr->writeln('');
             $this->stdErr->writeln('  <comment>Failed to read or write webhooks:</comment>');
             $this->stdErr->writeln('  ' . $e->getMessage());
@@ -547,24 +570,19 @@ abstract class IntegrationCommandBase extends CommandBase
     }
 
     /**
-     * @param Integration     $integration
+     * @param \Platformsh\Client\Model\Integration $integration
      */
-    protected function displayIntegration(Integration $integration)
+    public function displayIntegration(Integration $integration)
     {
-        /** @var \Platformsh\Cli\Service\Table $table */
-        $table = $this->getService('table');
-        /** @var \Platformsh\Cli\Service\PropertyFormatter $formatter */
-        $formatter = $this->getService('property_formatter');
-
         $info = [];
         foreach ($integration->getProperties() as $property => $value) {
-            $info[$property] = $formatter->format($value, $property);
+            $info[$property] = $this->formatter->format($value, $property);
         }
         if ($integration->hasLink('#hook')) {
-            $info['hook_url'] = $formatter->format($integration->getLink('#hook'));
+            $info['hook_url'] = $this->formatter->format($integration->getLink('#hook'));
         }
 
-        $table->renderSimple(array_values($info), array_keys($info));
+        $this->table->renderSimple(array_values($info), array_keys($info));
     }
 
     /**
@@ -579,16 +597,20 @@ abstract class IntegrationCommandBase extends CommandBase
         if (isset($this->bitbucketAccessTokens[$credentials['key']])) {
             return $this->bitbucketAccessTokens[$credentials['key']];
         }
-        $result = $this->api()
-            ->getHttpClient()
-            ->post('https://bitbucket.org/site/oauth2/access_token', [
-                'auth' => [$credentials['key'], $credentials['secret']],
-                'body' => [
-                    'grant_type' => 'client_credentials',
-                ],
-            ]);
+        try {
+            $result = $this->api
+                ->getHttpClient()
+                ->request('post', 'https://bitbucket.org/site/oauth2/access_token', [
+                    'auth' => [$credentials['key'], $credentials['secret']],
+                    'body' => [
+                        'grant_type' => 'client_credentials',
+                    ],
+                ]);
+        } catch (GuzzleException $e) {
+            throw new \RuntimeException('Failed to obtain access token from Bitbucket', 0, $e);
+        }
 
-        $data = $result->json();
+        $data = json_decode($result->getBody()->__toString(), TRUE);
         if (!isset($data['access_token'])) {
             throw new \RuntimeException('Access token not found in Bitbucket response');
         }
@@ -605,7 +627,7 @@ abstract class IntegrationCommandBase extends CommandBase
      *
      * @return string|TRUE
      */
-    protected function validateBitbucketCredentials(array $credentials)
+    public function validateBitbucketCredentials(array $credentials)
     {
         try {
             $this->getBitbucketAccessToken($credentials);
@@ -628,7 +650,7 @@ abstract class IntegrationCommandBase extends CommandBase
      * @param array                                             $errors
      * @param \Symfony\Component\Console\Output\OutputInterface $output
      */
-    protected function listValidationErrors(array $errors, OutputInterface $output)
+    public function listValidationErrors(array $errors, OutputInterface $output)
     {
         if (count($errors) === 1) {
             $this->stdErr->writeln('The following error was found:');

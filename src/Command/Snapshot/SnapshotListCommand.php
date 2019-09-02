@@ -1,10 +1,13 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Snapshot;
 
 use Platformsh\Cli\Command\CommandBase;
 use Platformsh\Cli\Console\AdaptiveTableCell;
-use Platformsh\Cli\Service\ActivityMonitor;
+use Platformsh\Cli\Service\Api;
 use Platformsh\Cli\Service\PropertyFormatter;
+use Platformsh\Cli\Service\Selector;
 use Platformsh\Cli\Service\Table;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -13,82 +16,78 @@ use Symfony\Component\Console\Output\OutputInterface;
 class SnapshotListCommand extends CommandBase
 {
 
+    protected static $defaultName = 'snapshot:list';
+
+    private $api;
+    private $formatter;
+    private $selector;
+    private $table;
+
+    public function __construct(
+        Api $api,
+        PropertyFormatter $formatter,
+        Selector $selector,
+        Table $table
+    ) {
+        $this->api = $api;
+        $this->formatter = $formatter;
+        $this->selector = $selector;
+        $this->table = $table;
+        parent::__construct();
+    }
+
     protected function configure()
     {
-        $this
-            ->setName('snapshot:list')
-            ->setAliases(['snapshots'])
+        $this->setAliases(['snapshots'])
             ->setDescription('List available snapshots of an environment')
-            ->addOption('limit', null, InputOption::VALUE_REQUIRED, 'Limit the number of snapshots to list', 10)
-            ->addOption('start', null, InputOption::VALUE_REQUIRED, 'Only snapshots created before this date will be listed');
-        Table::configureInput($this->getDefinition());
-        PropertyFormatter::configureInput($this->getDefinition());
-        $this->addProjectOption()
-             ->addEnvironmentOption();
-        $this->addExample('List the most recent snapshots')
-             ->addExample('List snapshots made before last week', "--start '1 week ago'");
+            ->addOption('limit', null, InputOption::VALUE_REQUIRED, 'Limit the number of snapshots to list', 10);
+
+        $definition = $this->getDefinition();
+        $this->table->configureInput($definition);
+        $this->formatter->configureInput($definition);
+        $this->selector->addProjectOption($definition);
+        $this->selector->addEnvironmentOption($definition);
+
+        $this->addExample('List the most recent snapshots');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
+        $selection = $this->selector->getSelection($input);
+        $selectedEnvironment = $selection->getEnvironment();
 
-        $environment = $this->getSelectedEnvironment();
-
-        $startsAt = null;
-        if ($input->getOption('start') && !($startsAt = strtotime($input->getOption('start')))) {
-            $this->stdErr->writeln('Invalid date: <error>' . $input->getOption('start') . '</error>');
-            return 1;
+        if (!$this->table->formatIsMachineReadable()) {
+            $this->stdErr->writeln("Finding snapshots for the environment <info>{$selectedEnvironment->id}</info>");
         }
 
-        /** @var \Platformsh\Cli\Service\Table $table */
-        $table = $this->getService('table');
-        /** @var \Platformsh\Cli\Service\PropertyFormatter $formatter */
-        $formatter = $this->getService('property_formatter');
-
-        /** @var \Platformsh\Cli\Service\ActivityLoader $loader */
-        $loader = $this->getService('activity_loader');
-        $activities = $loader->load($environment, $input->getOption('limit'), 'environment.backup', $startsAt);
-        if (!$activities) {
+        $backups = $selectedEnvironment->getBackups();
+        if (!$backups) {
             $this->stdErr->writeln('No snapshots found');
             return 1;
         }
 
-        $headers = ['Created', 'Snapshot name', 'Progress', 'State', 'Result'];
+        $headers = ['Created', 'Snapshot name', 'Status', 'Commit'];
         $rows = [];
-        foreach ($activities as $activity) {
-            $snapshot_name = !empty($activity->payload['backup_name']) ? $activity->payload['backup_name'] : 'N/A';
+        foreach ($backups as $backup) {
             $rows[] = [
-                $formatter->format($activity->created_at, 'created_at'),
-                new AdaptiveTableCell($snapshot_name, ['wrap' => false]),
-                $activity->getCompletionPercent() . '%',
-                ActivityMonitor::formatState($activity->state),
-                ActivityMonitor::formatResult($activity->result, !$table->formatIsMachineReadable()),
+                $this->formatter->format($backup->created_at, 'created_at'),
+                new AdaptiveTableCell($backup->id, ['wrap' => false]),
+                $backup->status,
+                $backup->commit_id,
             ];
         }
 
-        if (!$table->formatIsMachineReadable()) {
-            $this->stdErr->writeln(sprintf(
-                'Snapshots on the project %s, environment %s:',
-                $this->api()->getProjectLabel($this->getSelectedProject()),
-                $this->api()->getEnvironmentLabel($environment)
-            ));
+        if (!$this->table->formatIsMachineReadable()) {
+            $this->stdErr->writeln(
+                sprintf(
+                    'Snapshots for the project %s, environment %s:',
+                    $this->api->getProjectLabel($selection->getProject()),
+                    $this->api->getEnvironmentLabel($selectedEnvironment)
+                )
+            );
         }
 
-        $table->render($rows, $headers);
-
-        $max = $input->getOption('limit') ? (int) $input->getOption('limit') : 10;
-        $maybeMoreAvailable = count($activities) === $max;
-        if (!$table->formatIsMachineReadable() && $maybeMoreAvailable) {
-            $this->stdErr->writeln('');
-            $this->stdErr->writeln(sprintf(
-                'More snapshots may be available.'
-                . ' To display older snapshots, increase <info>--limit</info> above %d, or set <info>--start</info> to a date in the past.'
-                . ' For more information, run: <info>%s snapshot:list -h</info>',
-                $max,
-                $this->config()->get('application.executable')
-            ));
-        }
+        $this->table->render($rows, $headers);
 
         return 0;
     }

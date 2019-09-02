@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Console;
 
@@ -21,7 +22,7 @@ class Animation
      * @param int             $interval
      *    Minimum interval between frames in microseconds.
      */
-    public function __construct(OutputInterface $output, array $frames, $interval = 500000)
+    public function __construct(OutputInterface $output, array $frames, int $interval = 500000)
     {
         $this->output = $output;
         $this->frames = $frames;
@@ -45,12 +46,12 @@ class Animation
      *
      * @param string $placeholder
      */
-    public function render($placeholder = '.')
+    public function render(string $placeholder = '.'): void
     {
         // Ensure that at least $this->interval microseconds have passed since
         // the last frame.
         if ($this->lastFrameTime !== null) {
-            $timeSince = (microtime(true) - $this->lastFrameTime) * 1000000;
+            $timeSince = (int) (microtime(true) - $this->lastFrameTime) * 1000000;
             if ($timeSince < $this->interval) {
                 usleep($this->interval - $timeSince);
             }

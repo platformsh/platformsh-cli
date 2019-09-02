@@ -1,10 +1,12 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Tests;
 
+use PHPUnit\Framework\TestCase;
 use Platformsh\Cli\Service\Shell;
 
-class ShellServiceTest extends \PHPUnit_Framework_TestCase
+class ShellServiceTest extends TestCase
 {
 
     /**
@@ -27,7 +29,7 @@ class ShellServiceTest extends \PHPUnit_Framework_TestCase
 
         // With $mustRun enabled.
         $this->assertNotEmpty($shell->execute([$workingCommand], null, true));
-        $this->setExpectedException('Exception');
+        $this->expectException('Exception');
         $shell->execute(['which', 'nonexistent'], null, true);
     }
 }

@@ -1,9 +1,19 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Environment;
 
 use Platformsh\Cli\Command\CommandBase;
 use Platformsh\Cli\Exception\RootNotFoundException;
+use Platformsh\Cli\Local\LocalProject;
+use Platformsh\Cli\Service\ActivityService;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\Git;
+use Platformsh\Cli\Service\QuestionHelper;
+use Platformsh\Cli\Service\Selector;
 use Platformsh\Client\Model\Environment;
+use Platformsh\Client\Model\Project;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -11,25 +21,54 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class EnvironmentDeleteCommand extends CommandBase
 {
+    protected static $defaultName = 'environment:delete';
+
+    private $api;
+    private $activityService;
+    private $config;
+    private $git;
+    private $localProject;
+    private $questionHelper;
+    private $selector;
+
+    public function __construct(
+        Api $api,
+        ActivityService $activityService,
+        Config $config,
+        Git $git,
+        LocalProject $localProject,
+        QuestionHelper $questionHelper,
+        Selector $selector
+    ) {
+        $this->api = $api;
+        $this->activityService = $activityService;
+        $this->config = $config;
+        $this->git = $git;
+        $this->localProject = $localProject;
+        $this->questionHelper = $questionHelper;
+        $this->selector = $selector;
+        parent::__construct();
+    }
 
     protected function configure()
     {
-        $this
-            ->setName('environment:delete')
-            ->setDescription('Delete an environment')
+        $this->setDescription('Delete an environment')
             ->addArgument('environment', InputArgument::IS_ARRAY, 'The environment(s) to delete')
             ->addOption('delete-branch', null, InputOption::VALUE_NONE, 'Delete the remote Git branch(es) too')
             ->addOption('no-delete-branch', null, InputOption::VALUE_NONE, 'Do not delete the remote Git branch(es)')
             ->addOption('inactive', null, InputOption::VALUE_NONE, 'Delete all inactive environments')
             ->addOption('merged', null, InputOption::VALUE_NONE, 'Delete all merged environments')
             ->addOption('exclude', null, InputOption::VALUE_REQUIRED | InputOption::VALUE_IS_ARRAY, 'Environments not to delete');
-        $this->addProjectOption()
-             ->addEnvironmentOption()
-             ->addWaitOptions();
+
+        $definition = $this->getDefinition();
+        $this->selector->addEnvironmentOption($definition);
+        $this->selector->addProjectOption($definition);
+        $this->activityService->configureInput($definition);
+
         $this->addExample('Delete the environments "test" and "example-1"', 'test example-1');
         $this->addExample('Delete all inactive environments', '--inactive');
         $this->addExample('Delete all environments merged with "master"', '--merged master');
-        $service = $this->config()->get('service.name');
+        $service = $this->config->get('service.name');
         $this->setHelp(<<<EOF
 When a {$service} environment is deleted, it will become "inactive": it will
 exist only as a Git branch, containing code but no services, databases nor
@@ -42,9 +81,9 @@ EOF
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input, true);
+        $selection = $this->selector->getSelection($input);
 
-        $environments = $this->api()->getEnvironments($this->getSelectedProject());
+        $environments = $this->api->getEnvironments($selection->getProject());
 
         $toDelete = [];
 
@@ -70,12 +109,12 @@ EOF
 
         // Gather merged environments.
         if ($input->getOption('merged')) {
-            if (!$this->hasSelectedEnvironment()) {
+            if (!$selection->hasEnvironment()) {
                 $this->stdErr->writeln('Cannot find merged environments: no base environment specified.');
 
                 return 1;
             }
-            $base = $this->getSelectedEnvironment()->id;
+            $base = $selection->getEnvironment()->id;
             $this->stdErr->writeln("Finding environments merged with <info>$base</info>.");
             $merged = $this->getMergedEnvironments($base);
             if (!$merged) {
@@ -87,8 +126,8 @@ EOF
         // If --merged and --inactive are not specified, look for the selected
         // environment(s).
         if (!$input->getOption('merged') && !$input->getOption('inactive')) {
-            if ($this->hasSelectedEnvironment()) {
-                $toDelete = [$this->getSelectedEnvironment()];
+            if ($selection->hasEnvironment()) {
+                $toDelete = [$selection->getEnvironment()];
             } elseif ($environmentIds = $input->getArgument('environment')) {
                 $toDelete = array_intersect_key($environments, array_flip($environmentIds));
                 $notFound = array_diff($environmentIds, array_keys($environments));
@@ -108,7 +147,7 @@ EOF
             return 1;
         }
 
-        $success = $this->deleteMultiple($toDelete, $input, $this->stdErr);
+        $success = $this->deleteMultiple($toDelete, $selection->getProject(), $input, $this->stdErr);
 
         return $success ? 0 : 1;
     }
@@ -120,24 +159,21 @@ EOF
      */
     protected function getMergedEnvironments($base)
     {
-        $projectRoot = $this->getProjectRoot();
-        if (!$projectRoot) {
+        $projectRoot = $this->selector->getProjectRoot();
+        $project = $this->selector->getCurrentProject();
+        if (!$projectRoot || !$project) {
             throw new RootNotFoundException();
         }
 
-        /** @var \Platformsh\Cli\Service\Git $git */
-        $git = $this->getService('git');
-        $git->setDefaultRepositoryDir($projectRoot);
+        $this->git->setDefaultRepositoryDir($projectRoot);
 
-        /** @var \Platformsh\Cli\Local\LocalProject $localProject */
-        $localProject = $this->getService('local.project');
-        $localProject->ensureGitRemote($projectRoot, $this->getSelectedProject()->getGitUrl());
+        $this->localProject->ensureGitRemote($projectRoot, $project->getGitUrl());
 
-        $remoteName = $this->config()->get('detection.git_remote_name');
+        $remoteName = $this->config->get('detection.git_remote_name');
 
         // Find a list of branches merged on the remote.
-        $git->fetch($remoteName);
-        $mergedBranches = $git->getMergedBranches($remoteName . '/' . $base, true);
+        $this->git->fetch($remoteName);
+        $mergedBranches = $this->git->getMergedBranches($remoteName . '/' . $base, true);
         $mergedBranches = array_filter($mergedBranches, function ($mergedBranch) use ($remoteName, $base) {
             return strpos($mergedBranch, $remoteName) === 0;
         });
@@ -151,7 +187,7 @@ EOF
         }
 
         // Reconcile this with the list of environments from the API.
-        $environments = $this->api()->getEnvironments($this->getSelectedProject(), true);
+        $environments = $this->api->getEnvironments($project, true);
         $mergedEnvironments = array_intersect_key($environments, array_flip($mergedBranches));
         unset($mergedEnvironments[$base], $mergedEnvironments['master']);
         $parent = $environments[$base]['parent'];
@@ -164,19 +200,18 @@ EOF
 
     /**
      * @param Environment[]   $environments
+     * @param Project         $project
      * @param InputInterface  $input
      * @param OutputInterface $output
      *
      * @return bool
      */
-    protected function deleteMultiple(array $environments, InputInterface $input, OutputInterface $output)
+    protected function deleteMultiple(array $environments, Project $project, InputInterface $input, OutputInterface $output)
     {
         // Confirm which environments the user wishes to be deleted.
         $delete = [];
         $deactivate = [];
         $error = false;
-        /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-        $questionHelper = $this->getService('question_helper');
         foreach ($environments as $environment) {
             $environmentId = $environment->id;
             if ($environmentId == 'master') {
@@ -186,7 +221,7 @@ EOF
             }
             // Check that the environment does not have children.
             // @todo remove this check when Platform's behavior is fixed
-            foreach ($this->api()->getEnvironments($this->getSelectedProject()) as $potentialChild) {
+            foreach ($this->api->getEnvironments($project) as $potentialChild) {
                 if ($potentialChild->parent == $environment->id) {
                     $output->writeln(
                         "The environment <error>$environmentId</error> has children and therefore can't be deleted."
@@ -198,21 +233,21 @@ EOF
             }
             if ($environment->isActive()) {
                 $output->writeln("The environment <comment>$environmentId</comment> is currently active: deleting it will delete all associated data.");
-                if ($questionHelper->confirm("Are you sure you want to delete the environment <comment>$environmentId</comment>?")) {
+                if ($this->questionHelper->confirm("Are you sure you want to delete the environment <comment>$environmentId</comment>?")) {
                     $deactivate[$environmentId] = $environment;
                     if (!$input->getOption('no-delete-branch')
-                        && $this->shouldWait($input)
+                        && $this->activityService->shouldWait($input)
                         && ($input->getOption('delete-branch')
                             || (
                                 $input->isInteractive()
-                                && $questionHelper->confirm("Delete the remote Git branch too?")
+                                && $this->questionHelper->confirm("Delete the remote Git branch too?")
                             )
                         )) {
                         $delete[$environmentId] = $environment;
                     }
                 }
             } elseif ($environment->status === 'inactive') {
-                if ($questionHelper->confirm("Are you sure you want to delete the remote Git branch <comment>$environmentId</comment>?")) {
+                if ($this->questionHelper->confirm("Are you sure you want to delete the remote Git branch <comment>$environmentId</comment>?")) {
                     $delete[$environmentId] = $environment;
                 }
             } elseif ($environment->status === 'dirty') {
@@ -235,10 +270,8 @@ EOF
             }
         }
 
-        if ($this->shouldWait($input)) {
-            /** @var \Platformsh\Cli\Service\ActivityMonitor $activityMonitor */
-            $activityMonitor = $this->getService('activity_monitor');
-            if (!$activityMonitor->waitMultiple($deactivateActivities, $this->getSelectedProject())) {
+        if ($this->activityService->shouldWait($input)) {
+            if (!$this->activityService->waitMultiple($deactivateActivities, $project)) {
                 $error = true;
             }
         }
@@ -270,7 +303,7 @@ EOF
         }
 
         if (($deleted || $deactivated || $error) && isset($environment)) {
-            $this->api()->clearEnvironmentsCache($environment->project);
+            $this->api->clearEnvironmentsCache($environment->project);
         }
 
         return !$error;

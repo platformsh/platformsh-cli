@@ -1,9 +1,15 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Environment;
 
 use Platformsh\Cli\Command\CommandBase;
 use Platformsh\Cli\Model\Host\LocalHost;
 use Platformsh\Cli\Model\Route;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\QuestionHelper;
+use Platformsh\Cli\Service\Selector;
 use Platformsh\Cli\Service\Url;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -11,17 +17,40 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class EnvironmentUrlCommand extends CommandBase
 {
+    protected static $defaultName = 'environment:url';
+
+    private $api;
+    private $config;
+    private $questionHelper;
+    private $selector;
+    private $url;
+
+    public function __construct(
+        Api $api,
+        Config $config,
+        QuestionHelper $questionHelper,
+        Selector $selector,
+        Url $url
+    ) {
+        $this->api = $api;
+        $this->config = $config;
+        $this->questionHelper = $questionHelper;
+        $this->selector = $selector;
+        $this->url = $url;
+        parent::__construct();
+    }
 
     protected function configure()
     {
-        $this
-            ->setName('environment:url')
-            ->setAliases(['url'])
+        $this->setAliases(['url'])
             ->setDescription('Get the public URLs of an environment')
             ->addOption('primary', '1', InputOption::VALUE_NONE, 'Only return the URL for the primary route');
-        Url::configureInput($this->getDefinition());
-        $this->addProjectOption()
-             ->addEnvironmentOption();
+
+        $definition = $this->getDefinition();
+        $this->selector->addProjectOption($definition);
+        $this->selector->addEnvironmentOption($definition);
+        $this->url->configureInput($definition);
+
         $this->addExample('Give a choice of URLs to open (or print all URLs if there is no browser)');
         $this->addExample('Print all URLs', '--pipe');
         $this->addExample('Print and/or open the primary route URL', '--primary');
@@ -31,7 +60,7 @@ class EnvironmentUrlCommand extends CommandBase
     protected function execute(InputInterface $input, OutputInterface $output)
     {
         // Allow override via PLATFORM_ROUTES.
-        $prefix = $this->config()->get('service.env_prefix');
+        $prefix = $this->config->get('service.env_prefix');
         if (getenv($prefix . 'ROUTES') && !LocalHost::conflictsWithCommandLineOptions($input, $prefix)) {
             $this->debug('Reading URLs from environment variable ' . $prefix . 'ROUTES');
             $decoded = json_decode(base64_decode(getenv($prefix . 'ROUTES'), true), true);
@@ -41,8 +70,10 @@ class EnvironmentUrlCommand extends CommandBase
             $routes = Route::fromVariables($decoded);
         } else {
             $this->debug('Reading URLs from the API');
-            $this->validateInput($input);
-            $deployment = $this->api()->getCurrentDeployment($this->getSelectedEnvironment());
+            $environment = $this->selector->getSelection($input)
+                ->getEnvironment();
+
+            $deployment = $this->api->getCurrentDeployment($environment);
             $routes = Route::fromDeploymentApi($deployment->routes);
         }
         if (empty($routes)) {
@@ -72,7 +103,7 @@ class EnvironmentUrlCommand extends CommandBase
         }, $routes);
 
         // Sort URLs by preference (HTTPS first, shorter URLs first).
-        usort($urls, [$this->api(), 'urlSort']);
+        usort($urls, [$this->api, 'urlSort']);
 
         // Shift the primary URL to the top of the list.
         if ($primaryUrl !== null) {
@@ -88,9 +119,9 @@ class EnvironmentUrlCommand extends CommandBase
     /**
      * Displays or opens URLs.
      *
-     * @param string[]                                          $urls
-     * @param \Symfony\Component\Console\Input\InputInterface   $input
-     * @param \Symfony\Component\Console\Output\OutputInterface $output
+     * @param string[]        $urls
+     * @param InputInterface  $input
+     * @param OutputInterface $output
      */
     private function displayOrOpenUrls(array $urls, InputInterface $input, OutputInterface $output)
     {
@@ -107,13 +138,11 @@ class EnvironmentUrlCommand extends CommandBase
             // non-interactive input.
             $toDisplay = $urls[0];
         }
-        /** @var \Platformsh\Cli\Service\Url $urlService */
-        $urlService = $this->getService('url');
-        if (!$urlService->hasDisplay()) {
+        if (!$this->url->hasDisplay()) {
             $this->debug('Not opening URLs (no display found)');
             $output->writeln($toDisplay);
             return;
-        } elseif (!$urlService->canOpenUrls()) {
+        } elseif (!$this->url->canOpenUrls()) {
             $this->debug('Not opening URLs (no browser found)');
             $output->writeln($toDisplay);
             return;
@@ -123,12 +152,10 @@ class EnvironmentUrlCommand extends CommandBase
         if (count($urls) === 1) {
             $url = $urls[0];
         } else {
-            /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-            $questionHelper = $this->getService('question_helper');
-            $url = $questionHelper->choose(array_combine($urls, $urls), 'Enter a number to open a URL', $urls[0]);
+            $url = $this->questionHelper->choose(array_combine($urls, $urls), 'Enter a number to open a URL', $urls[0]);
         }
 
-        $urlService->openUrl($url);
+        $this->url->openUrl($url);
     }
 
     /**

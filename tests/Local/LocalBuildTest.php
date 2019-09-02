@@ -1,10 +1,12 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Tests;
 
+use PHPUnit\Framework\TestCase;
 use Platformsh\Cli\Local\LocalBuild;
 
-class LocalBuildTest extends \PHPUnit_Framework_TestCase
+class LocalBuildTest extends TestCase
 {
     public function testGetTreeId()
     {

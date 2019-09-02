@@ -12,7 +12,7 @@ use Platformsh\Client\Model\Project;
  */
 class GitDataApi
 {
-    const COMMIT_SYNTAX_HELP = 'This can also accept "HEAD", and caret (^) or tilde (~) suffixes for parent commits.';
+    public const COMMIT_SYNTAX_HELP = 'This can also accept "HEAD", and caret (^) or tilde (~) suffixes for parent commits.';
 
     private $api;
     private $cache;
@@ -110,15 +110,19 @@ class GitDataApi
             return new Commit($cached['data'], $cached['uri'], $client, true);
         }
         $baseUrl = Project::getProjectBaseFromUrl($environment->getUri()) . '/git/commits';
-        $commit = \Platformsh\Client\Model\Git\Commit::get($sha, $baseUrl, $client);
+
+        $commit = Commit::get($sha, $baseUrl, $client);
         if ($commit === false) {
             return false;
         }
+
         $data = $commit->getData();
+
         // No need to cache API metadata.
         if (isset($data['_links']['self']['meta'])) {
             unset($data['_links']['self']['meta']);
         }
+
         $this->cache->save($cacheKey, [
             'data' => $data,
             'uri' => $baseUrl,

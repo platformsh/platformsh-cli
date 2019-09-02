@@ -1,18 +1,33 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Server;
 
 use Platformsh\Cli\Exception\RootNotFoundException;
+use Platformsh\Cli\Local\LocalProject;
+use Platformsh\Cli\Service\Config;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
 class ServerStopCommand extends ServerCommandBase
 {
+    protected static $defaultName = 'server:stop';
+
+    private $localProject;
+
+    public function __construct(
+        Config $config,
+        LocalProject $localProject
+    )
+    {
+        $this->localProject = $localProject;
+        parent::__construct($config, $localProject);
+    }
+
     protected function configure()
     {
-        $this
-          ->setName('server:stop')
-          ->setDescription('Stop local project web server(s)')
+        $this->setDescription('Stop local project web server(s)')
           ->addOption('all', 'a', InputOption::VALUE_NONE, 'Stop all servers');
     }
 
@@ -27,7 +42,7 @@ class ServerStopCommand extends ServerCommandBase
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $projectRoot = $this->getProjectRoot();
+        $projectRoot = $this->localProject->getProjectRoot();
         $all = $input->getOption('all');
         if (!$all && !$projectRoot) {
             throw new RootNotFoundException('Specify --all to stop all servers, or go to a project directory');

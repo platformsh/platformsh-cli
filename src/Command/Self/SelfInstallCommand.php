@@ -1,8 +1,13 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Self;
 
 use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\Config;
 use Platformsh\Cli\Service\Filesystem;
+use Platformsh\Cli\Service\QuestionHelper;
+use Platformsh\Cli\Service\SubCommandRunner;
 use Platformsh\Cli\Util\OsUtil;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -11,15 +16,32 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class SelfInstallCommand extends CommandBase
 {
-    protected $local = true;
+    protected static $defaultName = 'self:install';
+
+    private $config;
+    private $fs;
+    private $questionHelper;
+    private $subCommandRunner;
+
+    public function __construct(
+        Config $config,
+        Filesystem $fs,
+        QuestionHelper $questionHelper,
+        SubCommandRunner $subCommandRunner
+    ) {
+        $this->config = $config;
+        $this->fs = $fs;
+        $this->questionHelper = $questionHelper;
+        $this->subCommandRunner = $subCommandRunner;
+        parent::__construct();
+    }
 
     protected function configure()
     {
-        $this->setName('self:install')
-             ->setDescription('Install or update CLI configuration files')
+        $this->setDescription('Install or update CLI configuration files')
              ->addOption('shell-type', null, InputOption::VALUE_REQUIRED, 'The shell type for autocompletion (bash or zsh)');
         $this->setHiddenAliases(['local:install']);
-        $cliName = $this->config()->get('application.name');
+        $cliName = $this->config->get('application.name');
         $this->setHelp(<<<EOT
 This command automatically installs shell configuration for the {$cliName},
 adding autocompletion support and handy aliases. Bash and ZSH are supported.
@@ -29,12 +51,12 @@ EOT
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $configDir = $this->config()->getUserConfigDir();
+        $configDir = $this->config->getUserConfigDir();
 
         $this->stdErr->write('Copying resource files...');
         $rcFiles = [
-            'shell-config.rc',
-            'shell-config-bash.rc',
+            'resources/shell-config.rc',
+            'resources/shell-config-bash.rc',
         ];
         $fs = new \Symfony\Component\Filesystem\Filesystem();
         try {
@@ -64,13 +86,13 @@ EOT
         try {
             $args = [
                 '--generate-hook' => true,
-                '--program' => $this->config()->get('application.executable'),
+                '--program' => $this->config->get('application.executable'),
             ];
             if ($shellType) {
                 $args['--shell-type'] = $shellType;
             }
             $buffer = new BufferedOutput();
-            $exitCode = $this->runOtherCommand('_completion', $args, $buffer);
+            $exitCode = $this->subCommandRunner->run('_completion', $args, $buffer);
             if ($exitCode === 0 && ($autoCompleteHook = $buffer->fetch())) {
                 $fs->dumpFile($configDir . '/autocompletion.sh', $autoCompleteHook);
                 $this->stdErr->writeln(' <info>done</info>');
@@ -92,15 +114,13 @@ EOT
         }
         $this->stdErr->writeln('');
 
-        $shellConfigOverrideVar = $this->config()->get('application.env_prefix') . 'SHELL_CONFIG_FILE';
+        $shellConfigOverrideVar = $this->config->get('application.env_prefix') . 'SHELL_CONFIG_FILE';
         $shellConfigOverride = getenv($shellConfigOverrideVar);
         if ($shellConfigOverride === '') {
             $this->debug(sprintf('Shell config detection disabled via %s', $shellConfigOverrideVar));
             $shellConfigFile = false;
         } elseif ($shellConfigOverride !== false) {
-            /** @var \Platformsh\Cli\Service\Filesystem $fsService */
-            $fsService = $this->getService('fs');
-            if (!$fsService->canWrite($shellConfigOverride)) {
+            if (!$this->fs->canWrite($shellConfigOverride)) {
                 throw new \RuntimeException(sprintf(
                     'File not writable: %s (defined in %s)',
                     $shellConfigOverride,
@@ -127,9 +147,9 @@ EOT
             $this->stdErr->writeln('');
         }
 
-        $configDirRelative = $this->config()->getUserConfigDir(false);
+        $configDirRelative = $this->config->getUserConfigDir(false);
         $rcDestination = $configDirRelative . '/' . 'shell-config.rc';
-        $suggestedShellConfig = 'HOME=${HOME:-' . escapeshellarg(Filesystem::getHomeDirectory()) . '}';
+        $suggestedShellConfig = 'HOME=${HOME:-' . escapeshellarg($this->fs->getHomeDirectory()) . '}';
         $suggestedShellConfig .= PHP_EOL . sprintf(
             'export PATH=%s:"$PATH"',
             '"$HOME/"' . escapeshellarg($configDirRelative . '/bin')
@@ -147,22 +167,20 @@ EOT
             return 0;
         }
 
-        /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-        $questionHelper = $this->getService('question_helper');
         $modify = false;
         $create = false;
         if ($shellConfigFile !== false) {
             $confirmText = file_exists($shellConfigFile)
                 ? 'Do you want to update the file automatically?'
                 : 'Do you want to create the file automatically?';
-            if ($questionHelper->confirm($confirmText)) {
+            if ($this->questionHelper->confirm($confirmText)) {
                 $modify = true;
                 $create = !file_exists($shellConfigFile);
             }
             $this->stdErr->writeln('');
         }
 
-        $appName = (string) $this->config()->get('application.name');
+        $appName = (string) $this->config->get('application.name');
         $begin = '# BEGIN SNIPPET: ' . $appName . ' configuration';
         $end = '# END SNIPPET';
 
@@ -253,20 +271,22 @@ EOT
     private function getRunAdvice($shellConfigFile, $binDir)
     {
         $advice = [
-            sprintf('To use the %s, run:', $this->config()->get('application.name'))
+            sprintf('To use the %s, run:', $this->config->get('application.name'))
         ];
         if (!$this->inPath($binDir)) {
             $sourceAdvice = sprintf('    <info>source %s</info>', $this->formatSourceArg($shellConfigFile));
             $sourceAdvice .= ' # (make sure your shell does this by default)';
             $advice[] = $sourceAdvice;
         }
-        $advice[] = sprintf('    <info>%s</info>', $this->config()->get('application.executable'));
+        $advice[] = sprintf('    <info>%s</info>', $this->config->get('application.executable'));
 
         return $advice;
     }
 
     /**
      * Check if a directory is in the PATH.
+     *
+     * @param string $dir
      *
      * @return bool
      */
@@ -345,7 +365,7 @@ EOT
     protected function findShellConfigFile($shellType)
     {
         // Special handling for the .environment file on Platform.sh environments.
-        $envPrefix = $this->config()->get('service.env_prefix');
+        $envPrefix = $this->config->get('service.env_prefix');
         if (getenv($envPrefix . 'PROJECT') !== false
             && getenv($envPrefix . 'APP_DIR') !== false
             && getenv($envPrefix . 'APP_DIR') === Filesystem::getHomeDirectory()) {

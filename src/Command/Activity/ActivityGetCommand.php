@@ -1,9 +1,15 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Activity;
 
 use Platformsh\Cli\Command\CommandBase;
-use Platformsh\Cli\Service\ActivityMonitor;
+use Platformsh\Cli\Console\Selection;
+use Platformsh\Cli\Service\ActivityService;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\Config;
 use Platformsh\Cli\Service\PropertyFormatter;
+use Platformsh\Cli\Service\Selector;
 use Platformsh\Cli\Service\Table;
 use Platformsh\Client\Model\Activity;
 use Symfony\Component\Console\Input\InputArgument;
@@ -13,36 +19,62 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class ActivityGetCommand extends CommandBase
 {
+    protected static $defaultName = 'activity:get';
+
+    private $activityService;
+    private $selector;
+    private $table;
+    private $formatter;
+    private $api;
+    private $config;
+
+    public function __construct(
+        ActivityService $activityService,
+        Api $api,
+        Config $config,
+        PropertyFormatter $formatter,
+        Selector $selector,
+        Table $table
+    ) {
+        $this->activityService = $activityService;
+        $this->api = $api;
+        $this->config = $config;
+        $this->formatter = $formatter;
+        $this->selector = $selector;
+        $this->table = $table;
+        parent::__construct();
+    }
+
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('activity:get')
-            ->addArgument('id', InputArgument::OPTIONAL, 'The activity ID. Defaults to the most recent activity.')
+        $this->addArgument('id', InputArgument::OPTIONAL, 'The activity ID. Defaults to the most recent activity.')
             ->addOption('type', null, InputOption::VALUE_REQUIRED, 'Filter recent activities by type')
             ->addOption('all', 'a', InputOption::VALUE_NONE, 'Check recent activities on all environments')
             ->addOption('property', 'P', InputOption::VALUE_REQUIRED, 'The property to view')
             ->setDescription('View detailed information on a single activity');
-        $this->addProjectOption()
-            ->addEnvironmentOption();
-        Table::configureInput($this->getDefinition());
-        PropertyFormatter::configureInput($this->getDefinition());
+
+        $definition = $this->getDefinition();
+        $this->selector->addProjectOption($definition);
+        $this->selector->addEnvironmentOption($definition);
+        $this->table->configureInput($definition);
+        $this->formatter->configureInput($definition);
+
         $this->addExample('Find the time a project was created', '--all --type project.create -P completed_at');
         $this->addExample('Find the duration (in seconds) of the last activity', '-P duration');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input, $input->getOption('all') || $input->getArgument('id'));
+        $selection = $this->selector->getSelection($input, $input->getOption('all') || $input->getArgument('id'));
 
         $id = $input->getArgument('id');
         if ($id) {
-            $activity = $this->getSelectedProject()
-                ->getActivity($id);
+            $activity = $selection->getProject()->getActivity($id);
             if (!$activity) {
-                $activity = $this->api()->matchPartialId($id, $this->getActivities($input), 'Activity');
+                $activity = $this->api->matchPartialId($id, $this->getActivities($selection, $input), 'Activity');
                 if (!$activity) {
                     $this->stdErr->writeln("Activity not found: <error>$id</error>");
 
@@ -50,7 +82,7 @@ class ActivityGetCommand extends CommandBase
                 }
             }
         } else {
-            $activities = $this->getActivities($input, 1);
+            $activities = $this->getActivities($selection, $input, 1);
             /** @var Activity $activity */
             $activity = reset($activities);
             if (!$activity) {
@@ -60,17 +92,12 @@ class ActivityGetCommand extends CommandBase
             }
         }
 
-        /** @var Table $table */
-        $table = $this->getService('table');
-        /** @var PropertyFormatter $formatter */
-        $formatter = $this->getService('property_formatter');
-
         $properties = $activity->getProperties();
 
-        if (!$input->getOption('property') && !$table->formatIsMachineReadable()) {
-            $properties['description'] = ActivityMonitor::getFormattedDescription($activity, true);
+        if (!$input->getOption('property') && !$this->table->formatIsMachineReadable()) {
+            $properties['description'] = $this->activityService->getFormattedDescription($activity, true);
         } else {
-            $properties['description'] = ActivityMonitor::getFormattedDescription($activity, false);
+            $properties['description'] = $this->activityService->getFormattedDescription($activity, false);
             if ($input->getOption('property')) {
                 $properties['description_html'] = $activity->description;
             }
@@ -82,7 +109,7 @@ class ActivityGetCommand extends CommandBase
         }
 
         if ($property = $input->getOption('property')) {
-            $formatter->displayData($output, $properties, $property);
+            $this->formatter->displayData($output, $properties, $property);
             return 0;
         }
 
@@ -98,13 +125,13 @@ class ActivityGetCommand extends CommandBase
         $rows = [];
         foreach ($properties as $property => $value) {
             $header[] = $property;
-            $rows[] = $formatter->format($value, $property);
+            $rows[] = $this->formatter->format($value, $property);
         }
 
-        $table->renderSimple($rows, $header);
+        $this->table->renderSimple($rows, $header);
 
-        if (!$table->formatIsMachineReadable()) {
-            $executable = $this->config()->get('application.executable');
+        if (!$this->table->formatIsMachineReadable()) {
+            $executable = $this->config->get('application.executable');
             $this->stdErr->writeln('');
             $this->stdErr->writeln(sprintf(
                 'To view the log for this activity, run: <info>%s activity:log %s</info>',
@@ -123,19 +150,20 @@ class ActivityGetCommand extends CommandBase
     /**
      * Get activities on the project or environment.
      *
+     * @param Selection                                       $selection
      * @param \Symfony\Component\Console\Input\InputInterface $input
      * @param int                                             $limit
      *
      * @return \Platformsh\Client\Model\Activity[]
      */
-    private function getActivities(InputInterface $input, $limit = 0)
+    private function getActivities(Selection $selection, InputInterface $input, int $limit = 0): array
     {
-        if ($this->hasSelectedEnvironment() && !$input->getOption('all')) {
-            return $this->getSelectedEnvironment()
+        if ($selection->hasEnvironment() && !$input->getOption('all')) {
+            return $selection->getEnvironment()
                 ->getActivities($limit, $input->getOption('type'));
         }
 
-        return $this->getSelectedProject()
+        return $selection->getProject()
             ->getActivities($limit, $input->getOption('type'));
     }
 
@@ -147,7 +175,7 @@ class ActivityGetCommand extends CommandBase
      *
      * @return int|null
      */
-    private function getDuration(Activity $activity, $now = null)
+    private function getDuration(Activity $activity, ?int $now = null): ?int
     {
         if ($activity->isComplete()) {
             $end = strtotime($activity->completed_at);

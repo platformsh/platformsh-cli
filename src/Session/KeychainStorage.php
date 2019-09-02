@@ -1,10 +1,10 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Session;
 
 use Platformsh\Cli\Service\Config;
 use Platformsh\Cli\Util\OsUtil;
-use Platformsh\Client\Session\SessionInterface;
 use Platformsh\Client\Session\Storage\SessionStorageInterface;
 
 /**
@@ -40,52 +40,48 @@ class KeychainStorage implements SessionStorageInterface
     /**
      * {@inheritdoc}
      */
-    public function load(SessionInterface $session)
+    public function load($sessionId)
     {
         $data = $this->exec(array_merge([
             'security',
             'find-generic-password',
             '-w', // Output the data to stdout.
-        ], $this->getKeyIdentifiers($session)));
+        ], $this->getKeyIdentifiers($sessionId)));
 
         if (is_string($data)) {
-            $session->setData($this->deserialize($data));
-        } else {
-            // If data doesn't exist in the keychain yet, load it from an old
-            // file for backwards compatibility.
-            $this->loadFromFile($session);
+            return $this->deserialize($data);
         }
+
+        // If data doesn't exist in the keychain yet, load it from an old
+        // file for backwards compatibility.
+        return $this->loadFromFile($sessionId);
     }
 
     /**
      * Load the session from an old file for backwards compatibility.
      *
-     * @param \Platformsh\Client\Session\SessionInterface $session
+     * @param string $sessionId
+     *
+     * @return array
      */
-    private function loadFromFile(SessionInterface $session)
+    private function loadFromFile($sessionId)
     {
-        $id = preg_replace('/[^\w\-]+/', '-', $session->getId());
+        $id = preg_replace('/[^\w\-]+/', '-', $sessionId);
         $dir = (new Config())->getSessionDir();
         $filename = "$dir/sess-$id/sess-$id.json";
         if (is_readable($filename) && ($contents = file_get_contents($filename))) {
-            $data = json_decode($contents, true) ?: [];
-            $session->setData($data);
-            $this->save($session);
-            // Reload the session from the keychain, and delete the file if
-            // successful.
-            if (rename($filename, $filename . '.bak')) {
-                $this->load($session);
-                if ($session->getData()) {
-                    unlink($filename . '.bak');
-                }
-            }
+            rename($filename, $filename . '.bak');
+
+            return json_decode($contents, true) ?: [];
         }
+
+        return [];
     }
 
     /**
      * {@inheritdoc}
      */
-    public function save(SessionInterface $session)
+    public function save($sessionId, array $data)
     {
         $result = $this->exec(array_merge(
             [
@@ -93,11 +89,11 @@ class KeychainStorage implements SessionStorageInterface
                 'add-generic-password',
                 '-U', // Update if the key already exists.
             ],
-            $this->getKeyIdentifiers($session),
+            $this->getKeyIdentifiers($sessionId),
             [
                 // The data ("password") to store. This must be the final
                 // argument.
-                '-w' . $this->serialize($session->getData()),
+                '-w' . $this->serialize($data),
             ]
         ));
         if ($result === false) {
@@ -120,19 +116,19 @@ class KeychainStorage implements SessionStorageInterface
     /**
      * Get arguments identifying the key to the 'security' utility.
      *
-     * @param \Platformsh\Client\Session\SessionInterface $session
+     * @param string $sessionId
      *
      * @return array
      */
-    private function getKeyIdentifiers(SessionInterface $session)
+    private function getKeyIdentifiers($sessionId)
     {
         return [
             // Account name:
             '-a' . $this->getAccountName(),
             // Service name:
-            '-s' . 'session-' . $session->getId(),
+            '-s' . 'session-' . $sessionId,
             // Label:
-            '-l' . $this->appName . ': ' . $session->getId(),
+            '-l' . $this->appName . ': ' . $sessionId,
         ];
     }
 

@@ -1,14 +1,16 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Tests;
 
+use PHPUnit\Framework\TestCase;
 use Platformsh\Cli\Local\BuildFlavor\Drupal;
 use Platformsh\Cli\Local\BuildFlavor\NoBuildFlavor;
 use Platformsh\Cli\Local\BuildFlavor\Symfony;
 use Platformsh\Cli\Local\LocalApplication;
 use Platformsh\Cli\Service\Config;
 
-class LocalApplicationTest extends \PHPUnit_Framework_TestCase
+class LocalApplicationTest extends TestCase
 {
 
     private $config;

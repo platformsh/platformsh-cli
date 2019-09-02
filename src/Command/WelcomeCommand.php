@@ -1,31 +1,52 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Command;
 
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\SubCommandRunner;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\Selector;
 use Platformsh\Client\Model\Project;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
 class WelcomeCommand extends CommandBase
 {
-    protected $hiddenInList = true;
-    protected $local = true;
+    protected static $defaultName = 'welcome';
+
+    private $api;
+    private $config;
+    private $subCommandRunner;
+    private $selector;
+
+    public function __construct(
+        Api $api,
+        Config $config,
+        SubCommandRunner $subCommandRunner,
+        Selector $selector
+    ) {
+        $this->api = $api;
+        $this->config = $config;
+        $this->subCommandRunner = $subCommandRunner;
+        $this->selector = $selector;
+        parent::__construct();
+    }
 
     protected function configure()
     {
-        $this
-            ->setName('welcome')
-            ->setDescription('Welcome to ' . $this->config()->get('service.name'));
+        $this->setDescription('Welcome to ' . $this->config->get('service.name'));
+        $this->setHidden(true);
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->stdErr->writeln("Welcome to " . $this->config()->get('service.name') . "!\n");
+        $this->stdErr->writeln("Welcome to " . $this->config->get('service.name') . "!\n");
 
-        $envPrefix = $this->config()->get('service.env_prefix');
+        $envPrefix = $this->config->get('service.env_prefix');
         $onContainer = getenv($envPrefix . 'PROJECT') && getenv($envPrefix . 'BRANCH');
 
-        if ($project = $this->getCurrentProject()) {
+        if ($project = $this->selector->getCurrentProject()) {
             $this->welcomeForLocalProjectDir($project);
         } elseif ($onContainer) {
             $this->welcomeOnContainer();
@@ -33,9 +54,9 @@ class WelcomeCommand extends CommandBase
             $this->defaultWelcome();
         }
 
-        $executable = $this->config()->get('application.executable');
+        $executable = $this->config->get('application.executable');
 
-        if ($this->api()->isLoggedIn()) {
+        if ($this->api->isLoggedIn()) {
             $this->stdErr->writeln("Manage your SSH keys by running <info>$executable ssh-keys</info>\n");
         }
 
@@ -48,7 +69,7 @@ class WelcomeCommand extends CommandBase
     private function defaultWelcome()
     {
         // The project is not known. Show all projects.
-        $this->runOtherCommand('projects', ['--refresh' => 0]);
+        $this->subCommandRunner->run('projects', ['--refresh' => 0]);
         $this->stdErr->writeln('');
     }
 
@@ -65,11 +86,11 @@ class WelcomeCommand extends CommandBase
         $this->stdErr->writeln("Project dashboard: <info>$projectUri</info>\n");
 
         // Show the environments.
-        $this->runOtherCommand('environments', [
+        $this->subCommandRunner->run('environments', [
             '--refresh' => 0,
             '--project' => $project->id,
         ]);
-        $executable = $this->config()->get('application.executable');
+        $executable = $this->config->get('application.executable');
         $this->stdErr->writeln("\nYou can list other projects by running <info>$executable projects</info>\n");
     }
 
@@ -83,9 +104,9 @@ class WelcomeCommand extends CommandBase
         if ($project->isSuspended()) {
             $messages = [];
             $messages[] = '<comment>This project is suspended.</comment>';
-            if ($project->owner === $this->api()->getMyAccount()['id']) {
+            if ($project->owner === $this->api->getMyAccount()['id']) {
                 $messages[] = '<comment>Update your payment details to re-activate it: '
-                    . $this->config()->get('service.accounts_url')
+                    . $this->config->get('service.accounts_url')
                     . '</comment>';
             }
             $messages[] = '';
@@ -98,8 +119,8 @@ class WelcomeCommand extends CommandBase
      */
     private function welcomeOnContainer()
     {
-        $envPrefix = $this->config()->get('service.env_prefix');
-        $executable = $this->config()->get('application.executable');
+        $envPrefix = $this->config->get('service.env_prefix');
+        $executable = $this->config->get('application.executable');
 
         $projectId = getenv($envPrefix . 'PROJECT');
         $environmentId = getenv($envPrefix . 'BRANCH');
@@ -107,17 +128,17 @@ class WelcomeCommand extends CommandBase
 
         $project = false;
         $environment = false;
-        if ($this->api()->isLoggedIn()) {
-            $project = $this->api()->getProject($projectId);
+        if ($this->api->isLoggedIn()) {
+            $project = $this->api->getProject($projectId);
             if ($project && $environmentId) {
-                $environment = $this->api()->getEnvironment($environmentId, $project);
+                $environment = $this->api->getEnvironment($environmentId, $project);
             }
         }
 
         if ($project) {
-            $this->stdErr->writeln('Project: ' . $this->api()->getProjectLabel($project));
+            $this->stdErr->writeln('Project: ' . $this->api->getProjectLabel($project));
             if ($environment) {
-                $this->stdErr->writeln('Environment: ' . $this->api()->getEnvironmentLabel($environment));
+                $this->stdErr->writeln('Environment: ' . $this->api->getEnvironmentLabel($environment));
             }
             if ($appName) {
                 $this->stdErr->writeln('Application name: <info>' . $appName . '</info>');

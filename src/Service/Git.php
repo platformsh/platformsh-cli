@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Service;
 
@@ -11,16 +12,16 @@ class Git
 {
 
     /** @var string|null */
-    protected $repositoryDir = null;
+    private $repositoryDir = null;
 
     /** @var Shell */
-    protected $shellHelper;
+    private $shellHelper;
 
     /** @var array */
-    protected $env = [];
+    private $env = [];
 
     /** @var string|null */
-    protected $sshCommandFile;
+    private $sshCommandFile;
 
     /**
      * Constructor.
@@ -38,7 +39,7 @@ class Git
      * @return string|false
      *   The version number, or false on failure.
      */
-    protected function getVersion()
+    private function getVersion()
     {
         static $version;
         if (!$version) {
@@ -57,7 +58,7 @@ class Git
      *
      * @throws DependencyMissingException
      */
-    public function ensureInstalled()
+    public function ensureInstalled(): void
     {
         if (!$this->shellHelper->commandExists('git')) {
             throw new DependencyMissingException('Git must be installed');
@@ -72,7 +73,7 @@ class Git
      * @param string $dir
      *   The path to a Git repository.
      */
-    public function setDefaultRepositoryDir($dir)
+    public function setDefaultRepositoryDir(string $dir): void
     {
         $this->repositoryDir = $dir;
     }
@@ -87,7 +88,7 @@ class Git
      *
      * @return string|false
      */
-    public function getCurrentBranch($dir = null, $mustRun = false)
+    public function getCurrentBranch(?string $dir = null, bool $mustRun = false)
     {
         $args = ['symbolic-ref', '--short', 'HEAD'];
 
@@ -99,12 +100,12 @@ class Git
      *
      * @param string $ref
      * @param bool   $remote
-     * @param null   $dir
+     * @param string|null $dir
      * @param bool   $mustRun
      *
      * @return string[]
      */
-    public function getMergedBranches($ref = 'HEAD', $remote = false, $dir = null, $mustRun = false)
+    public function getMergedBranches(string $ref = 'HEAD', bool $remote = false, ?string $dir = null, bool $mustRun = false): array
     {
         $args = ['branch', '--list', '--no-column', '--no-color', '--merged', $ref];
         if ($remote) {
@@ -142,7 +143,7 @@ class Git
      *   The command output, true if there is no output, or false if the command
      *   fails.
      */
-    public function execute(array $args, $dir = null, $mustRun = false, $quiet = true, array $env = [])
+    public function execute(array $args, $dir = null, bool $mustRun = false, bool $quiet = true, array $env = [])
     {
         // If enabled, set the working directory to the repository.
         if ($dir !== false) {
@@ -163,7 +164,7 @@ class Git
      *
      * @return bool
      */
-    public function init($dir, $mustRun = false)
+    public function init(string $dir, bool $mustRun = false): bool
     {
         if (is_dir($dir . '/.git')) {
             throw new \InvalidArgumentException("Already a repository: $dir");
@@ -184,7 +185,7 @@ class Git
      *
      * @return bool
      */
-    public function remoteRefExists($url, $ref = null, $heads = true)
+    public function remoteRefExists(string $url, ?string $ref = null, bool $heads = true): bool
     {
         $args = ['ls-remote', $url];
         if ($heads) {
@@ -210,7 +211,7 @@ class Git
      *
      * @return bool
      */
-    public function branchExists($branchName, $dir = null, $mustRun = false)
+    public function branchExists(string $branchName, ?string $dir = null, bool $mustRun = false): bool
     {
         // The porcelain command 'git branch' is less strict about character
         // encoding than (otherwise simpler) plumbing commands such as
@@ -226,14 +227,14 @@ class Git
     /**
      * Check whether a branch exists on a remote.
      *
-     * @param string $remote
-     * @param string $branchName
-     * @param null   $dir
-     * @param bool   $mustRun
+     * @param string      $remote
+     * @param string      $branchName
+     * @param string|null $dir
+     * @param bool        $mustRun
      *
      * @return bool
      */
-    public function remoteBranchExists($remote, $branchName, $dir = null, $mustRun = false)
+    public function remoteBranchExists(string $remote, string $branchName, ?string $dir = null, bool $mustRun = false): bool
     {
         $args = ['ls-remote', $remote, $branchName];
         $result = $this->execute($args, $dir, $mustRun);
@@ -252,7 +253,7 @@ class Git
      *
      * @return bool
      */
-    public function checkOutNew($name, $parent = null, $upstream = null, $dir = null, $mustRun = false)
+    public function checkOutNew(string $name, ?string $parent = null, ?string $upstream = null, ?string $dir = null, bool $mustRun = false): bool
     {
         $args = ['checkout', '-b', $name];
         if ($parent !== null) {
@@ -275,7 +276,7 @@ class Git
      *
      * @return bool
      */
-    public function fetch($remote, $branch = null, $dir = null, $mustRun = false)
+    public function fetch(string $remote, ?string $branch = null, ?string $dir = null, bool $mustRun = false): bool
     {
         $args = ['fetch', $remote];
         if ($branch !== null) {
@@ -297,7 +298,7 @@ class Git
      *
      * @return bool
      */
-    public function checkOut($name, $dir = null, $mustRun = false, $quiet = false)
+    public function checkOut(string $name, ?string $dir = null, bool $mustRun = false, bool $quiet = false): bool
     {
         return (bool) $this->execute([
             'checkout',
@@ -320,7 +321,7 @@ class Git
      *   The upstream, in the form remote/branch, or false if no upstream is
      *   found.
      */
-    public function getUpstream($branch = null, $dir = null, $mustRun = false)
+    public function getUpstream(string $branch = null, ?string $dir = null, bool $mustRun = false)
     {
         if ($branch === null) {
             $args = ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'];
@@ -351,7 +352,7 @@ class Git
      *
      * @return bool
      */
-    public function setUpstream($upstream, $branch = null, $dir = null, $mustRun = false)
+    public function setUpstream(string $upstream, ?string $branch = null, ?string $dir = null, bool $mustRun = false): bool
     {
         $args = ['branch'];
         if ($upstream !== false) {
@@ -369,7 +370,7 @@ class Git
     /**
      * @return bool
      */
-    public function supportsGitSshCommand()
+    public function supportsGitSshCommand(): bool
     {
         return version_compare($this->getVersion(), '2.3', '>=');
     }
@@ -377,7 +378,7 @@ class Git
     /**
      * @return bool
      */
-    public function supportsShallowClone()
+    public function supportsShallowClone(): bool
     {
         return version_compare($this->getVersion(), '1.9', '>=');
     }
@@ -398,7 +399,7 @@ class Git
      *
      * @return bool
      */
-    public function cloneRepo($url, $destination = null, array $args = [], $mustRun = false)
+    public function cloneRepo(string $url, string $destination = null, array $args = [], bool $mustRun = false): bool
     {
         $args = array_merge(['clone', $url], $args);
         if ($destination) {
@@ -416,7 +417,7 @@ class Git
      *
      * @return string|false
      */
-    public function getRoot($dir = null, $mustRun = false)
+    public function getRoot(?string $dir = null, bool $mustRun = false)
     {
         return $this->execute(['rev-parse', '--show-toplevel'], $dir, $mustRun);
     }
@@ -429,7 +430,7 @@ class Git
      *
      * @return bool
      */
-    public function checkIgnore($file, $dir = null)
+    public function checkIgnore(string $file, ?string $dir = null): bool
     {
         return (bool) $this->execute(['check-ignore', $file], $dir);
     }
@@ -446,7 +447,7 @@ class Git
      *
      * @return bool
      */
-    public function updateSubmodules($recursive = false, $dir = null, $mustRun = false)
+    public function updateSubmodules(bool $recursive = false, ?string $dir = null, bool $mustRun = false): bool
     {
         $args = ['submodule', 'update', '--init'];
         if ($recursive) {
@@ -468,7 +469,7 @@ class Git
      *
      * @return string|false
      */
-    public function getConfig($key, $dir = null, $mustRun = false)
+    public function getConfig(string $key, ?string $dir = null, bool $mustRun = false)
     {
         $args = ['config', '--get', $key];
 
@@ -485,7 +486,7 @@ class Git
      *   The complete SSH command. An empty string or null will use Git's
      *   default.
      */
-    public function setSshCommand($sshCommand)
+    public function setSshCommand(?string $sshCommand): void
     {
         if (empty($sshCommand) || $sshCommand === 'ssh') {
             unset($this->env['GIT_SSH_COMMAND'], $this->env['GIT_SSH']);
@@ -503,7 +504,7 @@ class Git
      *
      * @return string
      */
-    public function writeSshFile($sshCommand)
+    public function writeSshFile(string $sshCommand): string
     {
         $tempDir = sys_get_temp_dir();
         $tempFile = tempnam($tempDir, 'cli-git-ssh');

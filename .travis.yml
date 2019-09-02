@@ -6,18 +6,11 @@ env: TEST_SCRIPT=scripts/test/unit.sh
 
 matrix:
   include:
-    - php: '5.6'
+    - php: '7.1'
       env: TEST_SCRIPT=scripts/test/security.sh
     - php: '7.3'
       env: TEST_SCRIPT=scripts/test/security.sh
 
-    - php: '5.6'
-      env: TEST_SCRIPT=scripts/test/installer.sh
-
-    - php: '5.6'
-      env: TEST_SCRIPT=scripts/test/unit.sh
-    - php: '7.0'
-      env: TEST_SCRIPT=scripts/test/unit.sh
     - php: '7.1'
       env: TEST_SCRIPT=scripts/test/unit.sh
     - php: '7.2'
@@ -44,8 +37,9 @@ cache:
     - $HOME/.drush/cache
 
 install:
-  # No scripts on Travis, because Box isn't needed, and anyway it can't be
-  # installed under PHP <7.1.
+  # No scripts on Travis, because Box isn't needed by default.
   - composer install --no-interaction --no-scripts
+  - composer global require 'drush/drush:^8.0'
+  - export PLATFORMSH_CLI_DRUSH=$HOME/.composer/vendor/bin/drush
 
 script: "$TEST_SCRIPT"

@@ -1,43 +1,78 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Command\Variable;
 
+use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\ActivityService;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\QuestionHelper;
+use Platformsh\Cli\Service\Selector;
+use Platformsh\Cli\Service\VariableService;
 use Platformsh\ConsoleForm\Form;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
-class VariableUpdateCommand extends VariableCommandBase
+class VariableUpdateCommand extends CommandBase
 {
     /** @var Form */
     private $form;
+
+    protected static $defaultName = 'variable:update';
+
+    private $activityService;
+    private $api;
+    private $config;
+    private $questionHelper;
+    private $selector;
+    private $variableService;
+
+    public function __construct(
+        ActivityService $activityService,
+        Api $api,
+        Config $config,
+        QuestionHelper $questionHelper,
+        Selector $selector,
+        VariableService $variableService
+    ) {
+        $this->activityService = $activityService;
+        $this->api = $api;
+        $this->config = $config;
+        $this->questionHelper = $questionHelper;
+        $this->selector = $selector;
+        $this->variableService = $variableService;
+        parent::__construct();
+    }
 
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('variable:update')
-            ->setDescription('Update a variable')
+        $this->setDescription('Update a variable')
             ->addArgument('name', InputArgument::REQUIRED, 'The variable name');
-        $this->addLevelOption();
-        $fields = $this->getFields();
+
+        $fields = $this->variableService->getFields();
         unset($fields['name'], $fields['prefix'], $fields['environment'], $fields['level']);
         $this->form = Form::fromArray($fields);
-        $this->form->configureInputDefinition($this->getDefinition());
-        $this->addProjectOption()
-            ->addEnvironmentOption()
-            ->addWaitOptions();
+
+        $definition = $this->getDefinition();
+        $this->variableService->addLevelOption($definition);
+        $this->form->configureInputDefinition($definition);
+        $this->selector->addProjectOption($definition);
+        $this->selector->addEnvironmentOption($definition);
+        $this->activityService->configureInput($definition);
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $level = $this->getRequestedLevel($input);
-        $this->validateInput($input, $level === self::LEVEL_PROJECT);
+        $level = $this->variableService->getRequestedLevel($input);
+        $selection = $this->selector->getSelection($input, $level === VariableService::LEVEL_PROJECT);
 
         $name = $input->getArgument('name');
-        $variable = $this->getExistingVariable($name, $level);
+        $variable = $this->variableService->getExistingVariable($selection, $name, $level);
         if (!$variable) {
             return 1;
         }
@@ -81,15 +116,14 @@ class VariableUpdateCommand extends VariableCommandBase
         $result = $variable->update($values);
         $this->stdErr->writeln("Variable <info>{$variable->name}</info> updated");
 
-        $this->displayVariable($variable);
+        $this->variableService->displayVariable($variable);
 
         $success = true;
         if (!$result->countActivities()) {
-            $this->redeployWarning();
-        } elseif ($this->shouldWait($input)) {
-            /** @var \Platformsh\Cli\Service\ActivityMonitor $activityMonitor */
-            $activityMonitor = $this->getService('activity_monitor');
-            $success = $activityMonitor->waitMultiple($result->getActivities(), $this->getSelectedProject());
+            $this->activityService->redeployWarning();
+        } elseif ($this->activityService->shouldWait($input)) {
+            $success = $this->activityService
+                ->waitMultiple($result->getActivities(), $selection->getProject());
         }
 
         return $success ? 0 : 1;

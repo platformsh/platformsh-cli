@@ -1,7 +1,12 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Service;
 
 use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\Selector;
 use Platformsh\Cli\Service\Table;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -9,18 +14,39 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class ServiceListCommand extends CommandBase
 {
+    protected static $defaultName = 'service:list';
+
+    private $api;
+    private $config;
+    private $selector;
+    private $table;
+
+    public function __construct(
+        Api $api,
+        Config $config,
+        Selector $selector,
+        Table $table
+    ) {
+        $this->api = $api;
+        $this->config = $config;
+        $this->selector = $selector;
+        $this->table = $table;
+        parent::__construct();
+    }
+
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this->setName('service:list')
-            ->setAliases(['services'])
+        $this->setAliases(['services'])
             ->setDescription('List services in the project')
             ->addOption('refresh', null, InputOption::VALUE_NONE, 'Whether to refresh the cache');
-        $this->addProjectOption()
-            ->addEnvironmentOption();
-        Table::configureInput($this->getDefinition());
+
+        $definition = $this->getDefinition();
+        $this->selector->addProjectOption($definition);
+        $this->selector->addEnvironmentOption($definition);
+        $this->table->configureInput($definition);
     }
 
     /**
@@ -28,11 +54,11 @@ class ServiceListCommand extends CommandBase
      */
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
+        $selection = $this->selector->getSelection($input);
 
         // Find a list of deployed services.
-        $deployment = $this->api()
-            ->getCurrentDeployment($this->getSelectedEnvironment(), $input->getOption('refresh'));
+        $deployment = $this->api
+            ->getCurrentDeployment($selection->getEnvironment(), $input->getOption('refresh'));
         $services = $deployment->services;
 
         if (!count($services)) {
@@ -42,7 +68,7 @@ class ServiceListCommand extends CommandBase
                 $this->stdErr->writeln('');
                 $this->stdErr->writeln(sprintf(
                     'To list applications, run: <info>%s apps</info>',
-                    $this->config()->get('application.executable')
+                    $this->config->get('application.executable')
                 ));
             }
 
@@ -62,23 +88,21 @@ class ServiceListCommand extends CommandBase
             $rows[] = $row;
         }
 
-        /** @var \Platformsh\Cli\Service\Table $table */
-        $table = $this->getService('table');
-        if (!$table->formatIsMachineReadable()) {
+        if (!$this->table->formatIsMachineReadable()) {
             $this->stdErr->writeln(sprintf(
                 'Services on the project <info>%s</info>, environment <info>%s</info>:',
-                $this->api()->getProjectLabel($this->getSelectedProject()),
-                $this->api()->getEnvironmentLabel($this->getSelectedEnvironment())
+                $this->api->getProjectLabel($selection->getProject()),
+                $this->api->getEnvironmentLabel($selection->getEnvironment())
             ));
         }
 
-        $table->render($rows, $headers);
+        $this->table->render($rows, $headers);
 
-        if (!$table->formatIsMachineReadable() && $deployment->webapps) {
+        if (!$this->table->formatIsMachineReadable() && $deployment->webapps) {
             $this->stdErr->writeln('');
             $this->stdErr->writeln(sprintf(
                 'To list applications, run: <info>%s apps</info>',
-                $this->config()->get('application.executable')
+                $this->config->get('application.executable')
             ));
         }
 

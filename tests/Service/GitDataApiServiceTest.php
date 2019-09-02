@@ -2,9 +2,10 @@
 
 namespace Platformsh\Cli\Tests;
 
+use PHPUnit\Framework\TestCase;
 use Platformsh\Cli\Service\GitDataApi;
 
-class GitDataApiServiceTest extends \PHPUnit_Framework_TestCase
+class GitDataApiServiceTest extends TestCase
 {
 
     /**

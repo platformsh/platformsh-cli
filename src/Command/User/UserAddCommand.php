@@ -1,8 +1,16 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\User;
 
 use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\ActivityService;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\QuestionHelper;
+use Platformsh\Cli\Service\Selector;
 use Platformsh\Client\Model\EnvironmentAccess;
+use Platformsh\Client\Model\Project;
 use Platformsh\Client\Model\ProjectAccess;
 use Symfony\Component\Console\Exception\InvalidArgumentException;
 use Symfony\Component\Console\Helper\ProgressBar;
@@ -15,17 +23,38 @@ use Symfony\Component\Console\Question\Question;
 
 class UserAddCommand extends CommandBase
 {
+    protected static $defaultName = 'user:add';
+
+    protected $activityService;
+    protected $selector;
+
+    private $api;
+    private $config;
+    private $questionHelper;
+
+    public function __construct(
+        ActivityService $activityService,
+        Api $api,
+        Config $config,
+        QuestionHelper $questionHelper,
+        Selector $selector
+    ) {
+        $this->activityService = $activityService;
+        $this->api = $api;
+        $this->config = $config;
+        $this->questionHelper = $questionHelper;
+        $this->selector = $selector;
+        parent::__construct();
+    }
 
     protected function configure()
     {
-        $this
-            ->setName('user:add')
-            ->setDescription('Add a user to the project')
+        $this->setDescription('Add a user to the project')
             ->addArgument('email', InputArgument::OPTIONAL, "The user's email address");
-
         $this->addRoleOption();
-        $this->addProjectOption();
-        $this->addWaitOptions();
+
+        $this->selector->addProjectOption($this->getDefinition());
+        $this->activityService->configureInput($this->getDefinition());
 
         $this->addExample('Add Alice as a project admin', 'alice@example.com -r admin');
     }
@@ -47,11 +76,8 @@ class UserAddCommand extends CommandBase
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
-        $project = $this->getSelectedProject();
-
-        /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-        $questionHelper = $this->getService('question_helper');
+        $selection = $this->selector->getSelection($input);
+        $project = $selection->getProject();
 
         $hasOutput = false;
 
@@ -62,7 +88,7 @@ class UserAddCommand extends CommandBase
             $roleInput = preg_split('/[\s,]+/', reset($roleInput));
         }
         $specifiedProjectRole = $this->getSpecifiedProjectRole($roleInput);
-        $specifiedEnvironmentRoles = $this->getSpecifiedEnvironmentRoles($roleInput);
+        $specifiedEnvironmentRoles = $this->getSpecifiedEnvironmentRoles($project, $roleInput);
         unset($roleInput);
 
         // Process the [email] argument.
@@ -71,25 +97,25 @@ class UserAddCommand extends CommandBase
             $update = stripos($input->getFirstArgument(), ':u');
             if ($update && $input->isInteractive()) {
                 $choices = [];
-                foreach ($this->api()->getProjectAccesses($project) as $access) {
-                    $account = $this->api()->getAccount($access);
+                foreach ($this->api->getProjectAccesses($project) as $access) {
+                    $account = $this->api->getAccount($access);
                     $choices[$account['email']] = $this->getUserLabel($access);
                 }
-                $email = $questionHelper->choose($choices, 'Enter a number to choose a user to update:');
+                $email = $this->questionHelper->choose($choices, 'Enter a number to choose a user to update:');
             } else {
                 $question = new Question("Enter the user's email address: ");
                 $question->setValidator(function ($answer) {
                     return $this->validateEmail($answer);
                 });
                 $question->setMaxAttempts(5);
-                $email = $questionHelper->ask($input, $this->stdErr, $question);
+                $email = $this->questionHelper->ask($input, $this->stdErr, $question);
                 $hasOutput = true;
             }
         }
         $this->validateEmail($email);
 
         // Check the user's existing role on the project.
-        $existingProjectAccess = $this->api()->loadProjectAccessByEmail($project, $email);
+        $existingProjectAccess = $this->api->loadProjectAccessByEmail($project, $email);
         $existingEnvironmentRoles = [];
         if ($existingProjectAccess) {
             // Exit if the user is the owner already.
@@ -98,7 +124,7 @@ class UserAddCommand extends CommandBase
                     $this->stdErr->writeln('');
                 }
 
-                $this->stdErr->writeln(sprintf('The user %s is the owner of %s.', $this->getUserLabel($existingProjectAccess), $this->api()->getProjectLabel($project)));
+                $this->stdErr->writeln(sprintf('The user %s is the owner of %s.', $this->getUserLabel($existingProjectAccess), $this->api->getProjectLabel($project)));
                 if ($specifiedProjectRole || $specifiedEnvironmentRoles) {
                     $this->stdErr->writeln('');
                     $this->stdErr->writeln("<comment>The project owner's role(s) cannot be changed.</comment>");
@@ -110,7 +136,7 @@ class UserAddCommand extends CommandBase
             }
 
             // Check the user's existing role(s) on the project's environments.
-            $existingEnvironmentRoles = $this->getEnvironmentRoles($existingProjectAccess);
+            $existingEnvironmentRoles = $this->getEnvironmentRoles($project, $existingProjectAccess);
         }
 
         // If the user already exists, print a summary of their roles on the
@@ -120,7 +146,7 @@ class UserAddCommand extends CommandBase
                 $this->stdErr->writeln('');
             }
 
-            $this->stdErr->writeln(sprintf('Current role(s) of <info>%s</info> on %s:', $this->getUserLabel($existingProjectAccess), $this->api()->getProjectLabel($project)));
+            $this->stdErr->writeln(sprintf('Current role(s) of <info>%s</info> on %s:', $this->getUserLabel($existingProjectAccess), $this->api->getProjectLabel($project)));
             $this->stdErr->writeln(sprintf('  Project role: <info>%s</info>', $existingProjectAccess->role));
             foreach ($existingEnvironmentRoles as $id => $role) {
                 $this->stdErr->writeln(sprintf('    Role on <info>%s</info>: %s', $id, $role));
@@ -145,7 +171,7 @@ class UserAddCommand extends CommandBase
             && !$specifiedEnvironmentRoles;
         $desiredEnvironmentRoles = [];
         if ($desiredProjectRole !== ProjectAccess::ROLE_ADMIN) {
-            foreach ($this->api()->getEnvironments($project) as $id => $environment) {
+            foreach ($this->api->getEnvironments($project) as $id => $environment) {
                 if (isset($specifiedEnvironmentRoles[$id])) {
                     $desiredEnvironmentRoles[$id] = $specifiedEnvironmentRoles[$id];
                 } elseif (isset($existingEnvironmentRoles[$id])) {
@@ -157,7 +183,7 @@ class UserAddCommand extends CommandBase
             if ($hasOutput) {
                 $this->stdErr->writeln('');
             }
-            $desiredEnvironmentRoles = $this->showEnvironmentRolesForm($desiredEnvironmentRoles, $input);
+            $desiredEnvironmentRoles = $this->showEnvironmentRolesForm($project, $desiredEnvironmentRoles, $input);
             $hasOutput = true;
         }
 
@@ -171,7 +197,7 @@ class UserAddCommand extends CommandBase
             $changes[] = sprintf('Project role: <info>%s</info>', $desiredProjectRole);
         }
         if ($desiredProjectRole !== ProjectAccess::ROLE_ADMIN) {
-            foreach ($this->api()->getEnvironments($project) as $id => $environment) {
+            foreach ($this->api->getEnvironments($project) as $id => $environment) {
                 $new = isset($desiredEnvironmentRoles[$id]) ? $desiredEnvironmentRoles[$id] : 'none';
                 if ($existingEnvironmentRoles) {
                     $existing = isset($existingEnvironmentRoles[$id]) ? $existingEnvironmentRoles[$id] : 'none';
@@ -201,8 +227,8 @@ class UserAddCommand extends CommandBase
                 $this->stdErr->writeln('');
                 $this->stdErr->writeln(sprintf(
                     'To delete the user, run: <info>%s user:delete %s</info>',
-                    $this->config()->get('application.executable'),
-                    $this->api()->getAccount($existingProjectAccess)['email']
+                    $this->config->get('application.executable'),
+                    $this->api->getAccount($existingProjectAccess)['email']
                 ));
             }
 
@@ -239,7 +265,7 @@ class UserAddCommand extends CommandBase
         if ($existingProjectAccess) {
             $this->stdErr->writeln('Summary of changes:');
         } else {
-            $this->stdErr->writeln(sprintf('Adding the user <info>%s</info> to %s:', $email, $this->api()->getProjectLabel($project)));
+            $this->stdErr->writeln(sprintf('Adding the user <info>%s</info> to %s:', $email, $this->api->getProjectLabel($project)));
         }
         foreach ($changes as $change) {
             $this->stdErr->writeln('  ' . $change);
@@ -248,14 +274,14 @@ class UserAddCommand extends CommandBase
 
         // Ask for confirmation.
         if ($existingProjectAccess) {
-            if (!$questionHelper->confirm('Are you sure you want to make these change(s)?')) {
+            if (!$this->questionHelper->confirm('Are you sure you want to make these change(s)?')) {
 
                 return 1;
             }
         } else {
             $this->stdErr->writeln('<comment>Adding users can result in additional charges.</comment>');
             $this->stdErr->writeln('');
-            if (!$questionHelper->confirm('Are you sure you want to add this user?')) {
+            if (!$this->questionHelper->confirm('Are you sure you want to add this user?')) {
 
                 return 1;
             }
@@ -282,7 +308,7 @@ class UserAddCommand extends CommandBase
 
         // Make the desired changes at the environment level.
         if ($desiredProjectRole !== ProjectAccess::ROLE_ADMIN) {
-            foreach ($this->api()->getEnvironments($project) as $environmentId => $environment) {
+            foreach ($this->api->getEnvironments($project) as $environmentId => $environment) {
                 $role = isset($desiredEnvironmentRoles[$environmentId]) ? $desiredEnvironmentRoles[$environmentId] : 'none';
                 $access = $environment->getUser($userId);
                 if ($role === 'none') {
@@ -309,10 +335,8 @@ class UserAddCommand extends CommandBase
         }
 
         // Wait for activities to complete.
-        if ($this->shouldWait($input)) {
-            /** @var \Platformsh\Cli\Service\ActivityMonitor $activityMonitor */
-            $activityMonitor = $this->getService('activity_monitor');
-            if (!$activityMonitor->waitMultiple($activities, $project)) {
+        if ($this->activityService->shouldWait($input)) {
+            if (!$this->activityService->waitMultiple($activities, $project)) {
                 return 1;
             }
         }
@@ -420,7 +444,7 @@ class UserAddCommand extends CommandBase
      */
     private function getUserLabel(ProjectAccess $access)
     {
-        $account = $this->api()->getAccount($access);
+        $account = $this->api->getAccount($access);
 
         return sprintf('<info>%s</info> (%s)', $account['display_name'], $account['email']);
     }
@@ -435,9 +459,6 @@ class UserAddCommand extends CommandBase
      */
     private function showProjectRoleForm($defaultRole, InputInterface $input)
     {
-        /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-        $questionHelper = $this->getService('question_helper');
-
         $this->stdErr->writeln("The user's project role can be " . $this->describeRoles(ProjectAccess::$roles) . '.');
         $this->stdErr->writeln('');
         $question = new Question(
@@ -450,17 +471,18 @@ class UserAddCommand extends CommandBase
         $question->setMaxAttempts(5);
         $question->setAutocompleterValues(ProjectAccess::$roles);
 
-        return $questionHelper->ask($input, $this->stdErr, $question);
+        return $this->questionHelper->ask($input, $this->stdErr, $question);
     }
 
     /**
      * Load the user's roles on the project's environments.
      *
+     * @param \Platformsh\Client\Model\Project       $project
      * @param \Platformsh\Client\Model\ProjectAccess $projectAccess
      *
      * @return array
      */
-    private function getEnvironmentRoles(ProjectAccess $projectAccess)
+    private function getEnvironmentRoles(Project $project, ProjectAccess $projectAccess)
     {
         $environmentRoles = [];
         if ($projectAccess->role === ProjectAccess::ROLE_ADMIN) {
@@ -472,7 +494,7 @@ class UserAddCommand extends CommandBase
         $progress = new ProgressBar(isset($this->stdErr) && $this->stdErr->isDecorated() ? $this->stdErr : new NullOutput());
         $progress->setMessage('Loading environments...');
         $progress->setFormat('%message% %current%/%max%');
-        $environments = $this->api()->getEnvironments($this->getSelectedProject());
+        $environments = $this->api->getEnvironments($project);
         $progress->start(count($environments));
         foreach ($environments as $environment) {
             if ($access = $environment->getUser($projectAccess->id)) {
@@ -489,6 +511,7 @@ class UserAddCommand extends CommandBase
     /**
      * Show the form for entering environment roles.
      *
+     * @param \Platformsh\Client\Model\Project                $project
      * @param array                                           $defaultEnvironmentRoles
      * @param \Symfony\Component\Console\Input\InputInterface $input
      *
@@ -496,16 +519,14 @@ class UserAddCommand extends CommandBase
      *   The environment roles (keyed by environment ID) including the user's
      *   answers.
      */
-    private function showEnvironmentRolesForm(array $defaultEnvironmentRoles, InputInterface $input)
+    private function showEnvironmentRolesForm(Project $project, array $defaultEnvironmentRoles, InputInterface $input)
     {
-        /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-        $questionHelper = $this->getService('question_helper');
         $desiredEnvironmentRoles = [];
         $validEnvironmentRoles = array_merge(EnvironmentAccess::$roles, ['none']);
         $this->stdErr->writeln("The user's environment role(s) can be " . $this->describeRoles($validEnvironmentRoles) . '.');
         $initials = $this->describeRoleInput($validEnvironmentRoles);
         $this->stdErr->writeln('');
-        foreach (array_keys($this->api()->getEnvironments($this->getSelectedProject())) as $id) {
+        foreach (array_keys($this->api->getEnvironments($project)) as $id) {
             $default = isset($defaultEnvironmentRoles[$id]) ? $defaultEnvironmentRoles[$id] : 'none';
             $question = new Question(
                 sprintf('Role on <info>%s</info> (default: %s) <question>%s</question>: ', $id, $default, $initials),
@@ -520,7 +541,7 @@ class UserAddCommand extends CommandBase
             });
             $question->setAutocompleterValues(array_merge($validEnvironmentRoles, ['quit']));
             $question->setMaxAttempts(5);
-            $answer = $questionHelper->ask($input, $this->stdErr, $question);
+            $answer = $this->questionHelper->ask($input, $this->stdErr, $question);
             if ($answer === 'q' || $answer === 'quit') {
                 break;
             } else {
@@ -553,16 +574,16 @@ class UserAddCommand extends CommandBase
     /**
      * Extract the specified environment roles from the list (given in --role).
      *
+     * @param Project  $project
      * @param string[] $roles
      *
      * @return array
      *   An array of environment roles, keyed by environment ID.
      */
-    private function getSpecifiedEnvironmentRoles(array $roles)
+    private function getSpecifiedEnvironmentRoles(Project $project, array $roles)
     {
         $environmentRoles = [];
-        $project = $this->getSelectedProject();
-        $environments = $this->api()->getEnvironments($project);
+        $environments = $this->api->getEnvironments($project);
         foreach ($roles as $role) {
             if (strpos($role, ':') === false) {
                 continue;
@@ -581,7 +602,7 @@ class UserAddCommand extends CommandBase
                 }
                 continue;
             }
-            if (!$this->api()->getEnvironment($id, $project)) {
+            if (!$this->api->getEnvironment($id, $project)) {
                 throw new InvalidArgumentException('Environment not found: ' . $id);
             }
             $environmentRoles[$id] = $role;

@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Service;
 
@@ -21,7 +22,7 @@ class Ssh implements InputConfiguringInterface
     /**
      * @param \Symfony\Component\Console\Input\InputDefinition $definition
      */
-    public static function configureInput(InputDefinition $definition)
+    public function configureInput(InputDefinition $definition): void
     {
         $definition->addOption(
             new InputOption('identity-file', 'i', InputOption::VALUE_REQUIRED, 'An SSH identity (private key) to use')

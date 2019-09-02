@@ -1,11 +1,13 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Tests;
 
+use PHPUnit\Framework\TestCase;
 use Platformsh\Cli\Installer\Installer;
 use Platformsh\Cli\Installer\VersionResolver;
 
-class InstallerTest extends \PHPUnit_Framework_TestCase
+class InstallerTest extends TestCase
 {
 
     public function setUp() {
@@ -72,7 +74,7 @@ class InstallerTest extends \PHPUnit_Framework_TestCase
             ['version' => '3.0.0'],
         ], '2.0')['version']);
 
-        $this->setExpectedException(\RuntimeException::class);
+        $this->expectException(\RuntimeException::class);
         (new VersionResolver())->findLatestVersion([
             ['version' => '1.0.0'],
             ['version' => '3.0.1'],

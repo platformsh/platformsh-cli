@@ -1,42 +1,84 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Command\Variable;
 
+use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Console\Selection;
+use Platformsh\Cli\Service\ActivityService;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\QuestionHelper;
+use Platformsh\Cli\Service\Selector;
+use Platformsh\Cli\Service\VariableService;
 use Platformsh\Client\Model\ProjectLevelVariable;
 use Platformsh\Client\Model\Variable;
 use Platformsh\ConsoleForm\Form;
+use Symfony\Component\Console\Exception\InvalidArgumentException;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
-class VariableCreateCommand extends VariableCommandBase
+class VariableCreateCommand extends CommandBase
 {
     /** @var Form */
     private $form;
+
+    protected static $defaultName = 'variable:create';
+
+    private $activityService;
+    private $api;
+    private $config;
+    private $questionHelper;
+    private $selector;
+    private $variableService;
+
+    public function __construct(
+        ActivityService $activityService,
+        Api $api,
+        Config $config,
+        QuestionHelper $questionHelper,
+        Selector $selector,
+        VariableService $variableService
+    ) {
+        $this->activityService = $activityService;
+        $this->api = $api;
+        $this->config = $config;
+        $this->questionHelper = $questionHelper;
+        $this->selector = $selector;
+        $this->variableService = $variableService;
+        parent::__construct();
+    }
 
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('variable:create')
-            ->setDescription('Create a variable')
+        $this->setDescription('Create a variable')
             ->addArgument('name', InputArgument::OPTIONAL, 'The variable name');
-        $this->form = Form::fromArray($this->getFields());
-        $this->form->configureInputDefinition($this->getDefinition());
-        $this->addProjectOption()
-            ->addEnvironmentOption()
-            ->addWaitOptions();
+        $this->form = Form::fromArray($this->variableService->getFields());
+
+        $definition = $this->getDefinition();
+        $this->form->configureInputDefinition($definition);
+        $this->selector->addProjectOption($definition);
+        $this->selector->addEnvironmentOption($definition);
+        $this->activityService->configureInput($definition);
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input, true);
+        $selection = $this->selector->getSelection($input, true);
 
         // Set the default for the environment form field.
-        if ($this->hasSelectedEnvironment() && ($field = $this->form->getField('environment'))) {
-            $field->set('default', $this->getSelectedEnvironment()->id);
+        if ($environmentField = $this->form->getField('environment')) {
+            if ($selection->hasEnvironment()) {
+                $environmentField->set('default', $selection->getEnvironment()->id);
+            }
+            $project = $selection->getProject();
+            $environmentField->set('optionsCallback', function () use ($project) {
+                return array_keys($this->api->getEnvironments($project));
+            });
         }
 
         // Merge the 'name' argument with the --name option.
@@ -50,11 +92,12 @@ class VariableCreateCommand extends VariableCommandBase
         }
 
         // Check whether the variable already exists, if a name is provided.
-        if (($name = $input->getOption('name')) && $this->getExistingVariable($name, $input->getOption('level'), false)) {
+        if (($name = $input->getOption('name'))
+            && $this->variableService->getExistingVariable($selection, $name, $input->getOption('level'), false)) {
             $this->stdErr->writeln('The variable already exists: <error>' . $name . '</error>');
 
-            $executable = $this->config()->get('application.executable');
-            $escapedName = $this->escapeShellArg($name);
+            $executable = $this->config->get('application.executable');
+            $escapedName = $this->variableService->escapeShellArg($name);
             $this->stdErr->writeln('');
             $this->stdErr->writeln(sprintf(
                 'To view the variable, use: <comment>%s variable:get %s</comment>',
@@ -70,10 +113,7 @@ class VariableCreateCommand extends VariableCommandBase
             return 1;
         }
 
-        /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-        $questionHelper = $this->getService('question_helper');
-
-        $values = $this->form->resolveOptions($input, $output, $questionHelper);
+        $values = $this->form->resolveOptions($input, $output, $this->questionHelper);
 
         if (isset($values['prefix']) && isset($values['name'])) {
             if ($values['prefix'] !== 'none') {
@@ -83,8 +123,12 @@ class VariableCreateCommand extends VariableCommandBase
         }
 
         if (isset($values['environment'])) {
-            if (!$this->hasSelectedEnvironment()) {
-                $this->selectEnvironment($values['environment']);
+            if (!$selection->hasEnvironment()) {
+                $environment = $this->api->getEnvironment($values['environment'], $selection->getProject());
+                if (!$environment) {
+                    throw new InvalidArgumentException('Specified environment not found: ' . $values['environment']);
+                }
+                $selection = new Selection($selection->getProject(), $environment);
             }
             unset($values['environment']);
         }
@@ -113,7 +157,7 @@ class VariableCreateCommand extends VariableCommandBase
 
         switch ($level) {
             case 'environment':
-                $environment = $this->getSelectedEnvironment();
+                $environment = $selection->getEnvironment();
                 if ($environment->getVariable($values['name'])) {
                     $this->stdErr->writeln(sprintf(
                         'The variable <error>%s</error> already exists on the environment <error>%s</error>',
@@ -125,16 +169,16 @@ class VariableCreateCommand extends VariableCommandBase
                 }
                 $this->stdErr->writeln(sprintf(
                     'Creating variable <info>%s</info> on the environment <info>%s</info>', $values['name'], $environment->id));
-                $result = Variable::create($values, $environment->getLink('#manage-variables'), $this->api()->getHttpClient());
+                $result = Variable::create($values, $environment->getLink('#manage-variables'), $this->api->getHttpClient());
                 break;
 
             case 'project':
-                $project = $this->getSelectedProject();
+                $project = $selection->getProject();
                 if ($project->getVariable($values['name'])) {
                     $this->stdErr->writeln(sprintf(
                         'The variable <error>%s</error> already exists on the project %s',
                         $values['name'],
-                        $this->api()->getProjectLabel($project, 'error')
+                        $this->api->getProjectLabel($project, 'error')
                     ));
 
                     return 1;
@@ -142,25 +186,23 @@ class VariableCreateCommand extends VariableCommandBase
                 $this->stdErr->writeln(sprintf(
                     'Creating variable <info>%s</info> on the project %s',
                     $values['name'],
-                    $this->api()->getProjectLabel($project, 'info')
+                    $this->api->getProjectLabel($project, 'info')
                 ));
 
-                $result = ProjectLevelVariable::create($values, $project->getUri() . '/variables', $this->api()->getHttpClient());
+                $result = ProjectLevelVariable::create($values, $project->getUri() . '/variables', $this->api->getHttpClient());
                 break;
 
             default:
                 throw new \RuntimeException('Invalid level: ' . $level);
         }
 
-        $this->displayVariable($result->getEntity());
+        $this->variableService->displayVariable($result->getEntity());
 
         $success = true;
         if (!$result->countActivities()) {
-            $this->redeployWarning();
-        } elseif ($this->shouldWait($input)) {
-            /** @var \Platformsh\Cli\Service\ActivityMonitor $activityMonitor */
-            $activityMonitor = $this->getService('activity_monitor');
-            $success = $activityMonitor->waitMultiple($result->getActivities(), $this->getSelectedProject());
+            $this->activityService->redeployWarning();
+        } elseif ($this->activityService->shouldWait($input)) {
+            $success = $this->activityService->waitMultiple($result->getActivities(), $selection->getProject());
         }
 
         return $success ? 0 : 1;

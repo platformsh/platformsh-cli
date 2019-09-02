@@ -1,10 +1,12 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Tests\Util;
 
+use PHPUnit\Framework\TestCase;
 use Platformsh\Cli\Util\PortUtil;
 
-class PortUtilTest extends \PHPUnit_Framework_TestCase
+class PortUtilTest extends TestCase
 {
     public function testGetPortDoesNotReturnPortInUse()
     {
@@ -16,7 +18,7 @@ class PortUtilTest extends \PHPUnit_Framework_TestCase
         // test that a new number is returned.
         exec('lsof -sTCP:LISTEN -i@127.0.0.1 -P -n', $output, $returnVar);
         if ($returnVar === 0 && preg_match('/127\.0\.0\.1:([0-9]+)/', end($output), $matches)) {
-            $openPort = $matches[1];
+            $openPort = (int) $matches[1];
             $this->assertNotEquals($util->getPort($openPort), $openPort);
         }
         else {
@@ -36,7 +38,7 @@ class PortUtilTest extends \PHPUnit_Framework_TestCase
         $port = $util->getPort(rand(10000, 50000));
         $this->assertTrue($util->validatePort($port));
 
-        $this->setExpectedException('Exception', 'Failed to find');
+        $this->expectExceptionMessage('Failed to find');
         $util->getPort(70000);
     }
 

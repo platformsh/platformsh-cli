@@ -1,9 +1,13 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Activity;
 
 use Platformsh\Cli\Command\CommandBase;
-use Platformsh\Cli\Service\ActivityMonitor;
+use Platformsh\Cli\Service\ActivityService;
+use Platformsh\Cli\Service\Api;
 use Platformsh\Cli\Service\PropertyFormatter;
+use Platformsh\Cli\Service\Selector;
 use Platformsh\Client\Model\Activity;
 use Symfony\Component\Console\Helper\ProgressBar;
 use Symfony\Component\Console\Input\InputArgument;
@@ -14,14 +18,32 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class ActivityLogCommand extends CommandBase
 {
+    protected static $defaultName = 'activity:log';
+
+    private $activityService;
+    private $api;
+    private $selector;
+    private $propertyFormatter;
+
+    public function __construct(
+        ActivityService $activityService,
+        Api $api,
+        Selector $selector,
+        PropertyFormatter $formatter
+    ) {
+        $this->activityService = $activityService;
+        $this->api = $api;
+        $this->selector = $selector;
+        $this->propertyFormatter = $formatter;
+        parent::__construct();
+    }
+
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('activity:log')
-            ->addArgument('id', InputArgument::OPTIONAL, 'The activity ID. Defaults to the most recent activity.')
+        $this->addArgument('id', InputArgument::OPTIONAL, 'The activity ID. Defaults to the most recent activity.')
             ->addOption(
                 'refresh',
                 null,
@@ -32,25 +54,28 @@ class ActivityLogCommand extends CommandBase
             ->addOption('type', null, InputOption::VALUE_REQUIRED, 'Filter recent activities by type')
             ->addOption('all', 'a', InputOption::VALUE_NONE, 'Check recent activities on all environments')
             ->setDescription('Display the log for an activity');
-        PropertyFormatter::configureInput($this->getDefinition());
-        $this->addProjectOption()
-             ->addEnvironmentOption();
+
+        $definition = $this->getDefinition();
+        $this->selector->addProjectOption($definition);
+        $this->selector->addEnvironmentOption($definition);
+        $this->propertyFormatter->configureInput($definition);
+
         $this->addExample('Display the log for the last push on the current environment', '--type environment.push')
             ->addExample('Display the log for the last activity on the current project', '--all');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input, $input->getOption('all') || $input->getArgument('id'));
+        $selection = $this->selector->getSelection($input, $input->getOption('all') || $input->getArgument('id'));
 
         $id = $input->getArgument('id');
         if ($id) {
-            $activity = $this->getSelectedProject()
+            $activity = $selection->getProject()
                              ->getActivity($id);
             if (!$activity) {
-                $activities = $this->getSelectedEnvironment()
+                $activities = $selection->getEnvironment()
                     ->getActivities(0, $input->getOption('type'));
-                $activity = $this->api()->matchPartialId($id, $activities, 'Activity');
+                $activity = $this->api->matchPartialId($id, $activities, 'Activity');
                 if (!$activity) {
                     $this->stdErr->writeln("Activity not found: <error>$id</error>");
 
@@ -58,11 +83,11 @@ class ActivityLogCommand extends CommandBase
                 }
             }
         } else {
-            if ($this->hasSelectedEnvironment() && !$input->getOption('all')) {
-                $activities = $this->getSelectedEnvironment()
+            if ($selection->hasEnvironment() && !$input->getOption('all')) {
+                $activities = $selection->getEnvironment()
                     ->getActivities(1, $input->getOption('type'));
             } else {
-                $activities = $this->getSelectedProject()
+                $activities = $selection->getProject()
                     ->getActivities(1, $input->getOption('type'));
             }
             /** @var Activity $activity */
@@ -74,14 +99,11 @@ class ActivityLogCommand extends CommandBase
             }
         }
 
-        /** @var \Platformsh\Cli\Service\PropertyFormatter $formatter */
-        $formatter = $this->getService('property_formatter');
-
         $this->stdErr->writeln([
             sprintf('<info>Activity ID: </info>%s', $activity->id),
-            sprintf('<info>Description: </info>%s', ActivityMonitor::getFormattedDescription($activity)),
-            sprintf('<info>Created: </info>%s', $formatter->format($activity->created_at, 'created_at')),
-            sprintf('<info>State: </info>%s', ActivityMonitor::formatState($activity->state)),
+            sprintf('<info>Description: </info>%s', $this->activityService->getFormattedDescription($activity)),
+            sprintf('<info>Created: </info>%s', $this->propertyFormatter->format($activity->created_at, 'created_at')),
+            sprintf('<info>State: </info>%s', $this->activityService->formatState($activity->state)),
             '<info>Log: </info>',
         ]);
 
@@ -90,7 +112,7 @@ class ActivityLogCommand extends CommandBase
             $progressOutput = $this->stdErr->isDecorated() ? $this->stdErr : new NullOutput();
             $bar = new ProgressBar($progressOutput);
             $bar->setPlaceholderFormatterDefinition('state', function () use ($activity) {
-                return ActivityMonitor::formatState($activity->state);
+                return $this->activityService->formatState($activity->state);
             });
             $bar->setFormat('[%bar%] %elapsed:6s% (%state%)');
             $bar->start();
@@ -117,7 +139,7 @@ class ActivityLogCommand extends CommandBase
             // Once the activity is complete, something has probably changed in
             // the project's environments, so this is a good opportunity to
             // clear the cache.
-            $this->api()->clearEnvironmentsCache($activity->project);
+            $this->api->clearEnvironmentsCache($activity->project);
         } else {
             $output->writeln($activity->log);
         }

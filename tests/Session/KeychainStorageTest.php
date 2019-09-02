@@ -1,11 +1,13 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Tests;
 
+use PHPUnit\Framework\TestCase;
 use Platformsh\Cli\Session\KeychainStorage;
 use Platformsh\Client\Session\Session;
 
-class KeychainStorageTest extends \PHPUnit_Framework_TestCase
+class KeychainStorageTest extends TestCase
 {
     public function testKeyChainStorage()
     {
@@ -21,17 +23,21 @@ class KeychainStorageTest extends \PHPUnit_Framework_TestCase
         $session->setStorage($keychain);
 
         // Save data.
-        $session->setData($testData);
+        foreach ($testData as $key => $value) {
+            $session->set($key, $value);
+        }
         $session->save();
 
         // Reset the session, reload from the keychain, and check session data.
-        $session->load(true);
-        $this->assertEquals($testData, $session->getData());
+        $session = new Session('default', [], $keychain);
+        foreach ($testData as $key => $value) {
+            $this->assertEquals($value, $session->get($key));
+        }
 
         // Delete data from the keychain, reset the session, and check the
         // session is empty.
         $keychain->deleteAll();
-        $session->load(true);
-        $this->assertEquals([], $session->getData());
+        $session = new Session('default', [], $keychain);
+        $this->assertEquals(null, $session->get('foo'));
     }
 }

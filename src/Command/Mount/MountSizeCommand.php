@@ -1,8 +1,13 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Command\Mount;
 
 use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\Config;
+use Platformsh\Cli\Service\Mount;
+use Platformsh\Cli\Service\Selector;
+use Platformsh\Cli\Service\Shell;
 use Platformsh\Cli\Service\Ssh;
 use Platformsh\Cli\Service\Table;
 use Symfony\Component\Console\Helper\Helper;
@@ -12,23 +17,48 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class MountSizeCommand extends CommandBase
 {
+    protected static $defaultName = 'mount:size';
+
+    private $config;
+    private $mountService;
+    private $selector;
+    private $shell;
+    private $ssh;
+    private $table;
+
+    public function __construct(
+        Config $config,
+        Mount $mountService,
+        Selector $selector,
+        Shell $shell,
+        Ssh $ssh,
+        Table $table
+    ) {
+        $this->config = $config;
+        $this->mountService = $mountService;
+        $this->selector = $selector;
+        $this->shell = $shell;
+        $this->ssh = $ssh;
+        $this->table = $table;
+        parent::__construct();
+    }
 
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('mount:size')
-            ->setDescription('Check the disk usage of mounts')
+        $this->setDescription('Check the disk usage of mounts')
             ->addOption('bytes', 'B', InputOption::VALUE_NONE, 'Show sizes in bytes')
-            ->addOption('refresh', null, InputOption::VALUE_NONE, 'Refresh the cache');
-        Table::configureInput($this->getDefinition());
-        Ssh::configureInput($this->getDefinition());
-        $this->addProjectOption();
-        $this->addEnvironmentOption();
-        $this->addRemoteContainerOptions();
-        $appConfigFile = $this->config()->get('service.app_config_file');
+            ->addOption('refresh', null, InputOption::VALUE_NONE, 'Whether to refresh the cache');
+
+        $definition = $this->getDefinition();
+        $this->selector->addAllOptions($definition, true);
+        $this->table->configureInput($definition);
+        $this->ssh->configureInput($definition);
+
+        $appConfigFile = $this->config->get('service.app_config_file');
+
         $this->setHelp(<<<EOF
 Use this command to check the disk size and usage for an application's mounts.
 
@@ -37,7 +67,7 @@ filesystem. They are configured in the <info>mounts</info> key in the <info>$app
 
 The filesystem's total size is determined by the <info>disk</info> key in the same file.
 EOF
-);
+        );
     }
 
     /**
@@ -45,9 +75,7 @@ EOF
      */
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
-
-        $container = $this->selectRemoteContainer($input);
+        $container = $this->selector->getSelection($input)->getRemoteContainer();
         $mounts = $container->getMounts();
 
         if (empty($mounts)) {
@@ -74,7 +102,7 @@ EOF
         //      mounts.
         //   3. Run a 'du' command on each of the mounted paths, to find their
         //      individual sizes.
-        $appDirVar = $this->config()->get('service.env_prefix') . 'APP_DIR';
+        $appDirVar = $this->config->get('service.env_prefix') . 'APP_DIR';
         $commands = [];
         $commands[] = 'echo "$' . $appDirVar . '"';
         $commands[] = 'echo';
@@ -92,12 +120,8 @@ EOF
             'ssh',
             $container->getSshUrl(),
         ];
-        /** @var \Platformsh\Cli\Service\Ssh $ssh */
-        $ssh = $this->getService('ssh');
-        $sshArgs = array_merge($sshArgs, $ssh->getSshArgs());
-        /** @var \Platformsh\Cli\Service\Shell $shell */
-        $shell = $this->getService('shell');
-        $result = $shell->execute(array_merge($sshArgs, [$command]), null, true);
+        $sshArgs = array_merge($sshArgs, $this->ssh->getSshArgs());
+        $result = $this->shell->execute(array_merge($sshArgs, [$command]), null, true);
 
         // Separate the commands' output.
         list($appDir, $dfOutput, $duOutput) = explode("\n\n", $result, 3);
@@ -140,9 +164,7 @@ EOF
             $rows[] = $row;
         }
 
-        /** @var \Platformsh\Cli\Service\Table $table */
-        $table = $this->getService('table');
-        $table->render($rows, $header);
+        $this->table->render($rows, $header);
 
         if (!$table->formatIsMachineReadable()) {
             if (count($volumeInfo) === 1 && count($mountPaths) > 1) {

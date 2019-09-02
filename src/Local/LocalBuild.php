@@ -1,4 +1,6 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Local;
 
 use Platformsh\Cli\Service\Config;
@@ -179,15 +181,17 @@ class LocalBuild
         if ($others === false) {
             return false;
         }
-        $count = 0;
-        foreach (explode("\n", $others) as $filename) {
-            if ($count > 5000) {
-                return false;
-            }
-            $filename = "$appRoot/$filename";
-            if (is_file($filename)) {
-                $hashes[] = sha1_file($filename);
-                $count++;
+        if (is_array($others)) {
+            $count = 0;
+            foreach (explode("\n", $others) as $filename) {
+                if ($count > 5000) {
+                    return false;
+                }
+                $filename = "$appRoot/$filename";
+                if (is_file($filename)) {
+                    $hashes[] = sha1_file($filename);
+                    $count++;
+                }
             }
         }
 

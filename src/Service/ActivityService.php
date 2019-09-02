@@ -1,44 +1,43 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Service;
 
 use Platformsh\Client\Model\Activity;
 use Platformsh\Client\Model\Project;
 use Symfony\Component\Console\Helper\ProgressBar;
+use Symfony\Component\Console\Input\InputDefinition;
+use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\ConsoleOutputInterface;
 use Symfony\Component\Console\Output\NullOutput;
 use Symfony\Component\Console\Output\OutputInterface;
 
-class ActivityMonitor
+class ActivityService implements InputConfiguringInterface
 {
 
-    protected static $resultNames = [
+    private static $resultNames = [
         Activity::RESULT_FAILURE => 'failure',
         Activity::RESULT_SUCCESS => 'success',
     ];
 
-    protected static $stateNames = [
+    private static $stateNames = [
         Activity::STATE_PENDING => 'pending',
         Activity::STATE_COMPLETE => 'complete',
         Activity::STATE_IN_PROGRESS => 'in progress',
     ];
 
-    protected $output;
+    private $config;
+    private $stdErr;
 
     /**
+     * @param \Platformsh\Cli\Service\Config                    $config
      * @param \Symfony\Component\Console\Output\OutputInterface $output
      */
-    public function __construct(OutputInterface $output)
+    public function __construct(Config $config, OutputInterface $output)
     {
-        $this->output = $output;
-    }
-
-    /**
-     * @return \Symfony\Component\Console\Output\OutputInterface
-     */
-    protected function getStdErr()
-    {
-        return $this->output instanceof ConsoleOutputInterface ? $this->output->getErrorOutput() : $this->output;
+        $this->config = $config;
+        $this->stdErr = $output instanceof ConsoleOutputInterface ? $output->getErrorOutput() : $output;
     }
 
     /**
@@ -49,7 +48,7 @@ class ActivityMonitor
      *
      * @return string
      */
-    protected function indent($string, $prefix = '    ')
+    private function indent(string $string, string $prefix = '    '): string
     {
         return preg_replace('/^/m', $prefix, $string);
     }
@@ -63,18 +62,16 @@ class ActivityMonitor
      *
      * @return bool True if the activity succeeded, false otherwise.
      */
-    public function waitAndLog(Activity $activity, $success = null, $failure = null)
+    public function waitAndLog(Activity $activity, ?string $success = null, ?string $failure = null): bool
     {
-        $stdErr = $this->getStdErr();
-
-        $stdErr->writeln(sprintf(
+        $this->stdErr->writeln(sprintf(
             'Waiting for the activity <info>%s</info> (%s):',
             $activity->id,
             self::getFormattedDescription($activity)
         ));
 
         // The progress bar will show elapsed time and the activity's state.
-        $bar = $this->newProgressBar($stdErr);
+        $bar = $this->newProgressBar($this->stdErr);
         $bar->setPlaceholderFormatterDefinition('state', function () use ($activity) {
             return $this->formatState($activity->state);
         });
@@ -88,29 +85,29 @@ class ActivityMonitor
                 $bar->advance();
             },
             // Display new log output when it is available.
-            function ($log) use ($stdErr, $bar) {
+            function ($log) use ($bar) {
                 // Clear the progress bar and ensure the current line is flushed.
                 $bar->clear();
-                $stdErr->write($stdErr->isDecorated() ? "\n\033[1A" : "\n");
+                $this->stdErr->write($this->stdErr->isDecorated() ? "\n\033[1A" : "\n");
 
                 // Display the new log output.
-                $stdErr->write($this->indent($log));
+                $this->stdErr->write($this->indent($log));
 
                 // Display the progress bar again.
                 $bar->advance();
             }
         );
         $bar->finish();
-        $stdErr->writeln('');
+        $this->stdErr->writeln('');
 
         // Display the success or failure messages.
         switch ($activity['result']) {
             case Activity::RESULT_SUCCESS:
-                $stdErr->writeln($success ?: "Activity <info>{$activity->id}</info> succeeded");
+                $this->stdErr->writeln($success ?: "Activity <info>{$activity->id}</info> succeeded");
                 return true;
 
             case Activity::RESULT_FAILURE:
-                $stdErr->writeln($failure ?: "Activity <error>{$activity->id}</error> failed");
+                $this->stdErr->writeln($failure ?: "Activity <error>{$activity->id}</error> failed");
                 return false;
         }
 
@@ -129,10 +126,8 @@ class ActivityMonitor
      * @return bool
      *   True if all activities succeed, false otherwise.
      */
-    public function waitMultiple(array $activities, Project $project)
+    public function waitMultiple(array $activities, Project $project): bool
     {
-        $stdErr = $this->getStdErr();
-
         $count = count($activities);
         if ($count == 0) {
             return true;
@@ -140,11 +135,11 @@ class ActivityMonitor
             return $this->waitAndLog(reset($activities));
         }
 
-        $stdErr->writeln(sprintf('Waiting for %d activities...', $count));
+        $this->stdErr->writeln(sprintf('Waiting for %d activities...', $count));
 
         // The progress bar will show elapsed time and all of the activities'
         // states.
-        $bar = $this->newProgressBar($stdErr);
+        $bar = $this->newProgressBar($this->stdErr);
         $states = [];
         foreach ($activities as $activity) {
             $state = $activity->state;
@@ -201,7 +196,7 @@ class ActivityMonitor
             $bar->advance();
         }
         $bar->finish();
-        $stdErr->writeln('');
+        $this->stdErr->writeln('');
 
         // Display success or failure messages for each activity.
         $success = true;
@@ -209,17 +204,17 @@ class ActivityMonitor
             $description = self::getFormattedDescription($activity);
             switch ($activity['result']) {
                 case Activity::RESULT_SUCCESS:
-                    $stdErr->writeln(sprintf('Activity <info>%s</info> succeeded: %s', $activity->id, $description));
+                    $this->stdErr->writeln(sprintf('Activity <info>%s</info> succeeded: %s', $activity->id, $description));
                     break;
 
                 case Activity::RESULT_FAILURE:
                     $success = false;
-                    $stdErr->writeln(sprintf('Activity <error>%s</error> failed', $activity->id));
+                    $this->stdErr->writeln(sprintf('Activity <error>%s</error> failed', $activity->id));
 
                     // If the activity failed, show the complete log.
-                    $stdErr->writeln('  Description: ' . $description);
-                    $stdErr->writeln('  Log:');
-                    $stdErr->writeln($this->indent($activity->log));
+                    $this->stdErr->writeln('  Description: ' . $description);
+                    $this->stdErr->writeln('  Log:');
+                    $this->stdErr->writeln($this->indent($activity->log));
                     break;
             }
         }
@@ -234,7 +229,7 @@ class ActivityMonitor
      *
      * @return string
      */
-    public static function formatState($state)
+    public function formatState(string $state): string
     {
         return isset(self::$stateNames[$state]) ? self::$stateNames[$state] : $state;
     }
@@ -247,13 +242,15 @@ class ActivityMonitor
      *
      * @return string
      */
-    public static function formatResult($result, $decorate = true)
+    public function formatResult(string $result, bool $decorate = true): string
     {
-        $name = isset(self::$stateNames[$result]) ? self::$stateNames[$result] : $result;
+        $name = isset(self::$resultNames[$result]) ? self::$resultNames[$result] : $result;
 
-        return $decorate && $result === Activity::RESULT_FAILURE
-            ? '<error>' . $name . '</error>'
-            : $name;
+        if ($decorate && $result === Activity::RESULT_FAILURE) {
+            return '<bg=red>' . $name . '</>';
+        }
+
+        return $name;
     }
 
     /**
@@ -263,7 +260,7 @@ class ActivityMonitor
      *
      * @return ProgressBar
      */
-    protected function newProgressBar(OutputInterface $output)
+    private function newProgressBar(OutputInterface $output)
     {
         // If the console output is not decorated (i.e. it does not support
         // ANSI), use NullOutput to suppress the progress bar entirely.
@@ -280,7 +277,7 @@ class ActivityMonitor
      *
      * @return string
      */
-    public static function getFormattedDescription(Activity $activity, $withDecoration = true)
+    public function getFormattedDescription(Activity $activity, bool $withDecoration = true): string
     {
         if (!$withDecoration) {
             return $activity->getDescription(false);
@@ -300,5 +297,79 @@ class ActivityMonitor
         $value = html_entity_decode($value, ENT_QUOTES, 'utf-8');
 
         return $value;
+    }
+
+    /**
+     * {@inheritdoc}
+     *
+     * Add both the --no-wait and --wait options.
+     */
+    public function configureInput(InputDefinition $inputDefinition): void
+    {
+        $description = 'Wait for the operation to complete';
+        if (!$this->detectRunningInHook()) {
+            $description = 'Wait for the operation to complete (default)';
+        }
+
+        $inputDefinition->addOption(new InputOption('no-wait', 'W', InputOption::VALUE_NONE, 'Do not wait for the operation to complete'));
+        $inputDefinition->addOption(new InputOption('wait', null, InputOption::VALUE_NONE, $description));
+    }
+
+    /**
+     * Returns whether we should wait for an operation to complete.
+     *
+     * @param \Symfony\Component\Console\Input\InputInterface $input
+     *
+     * @return bool
+     */
+    public function shouldWait(InputInterface $input): bool
+    {
+        if ($input->hasOption('no-wait') && $input->getOption('no-wait')) {
+            return false;
+        }
+        if ($input->hasOption('wait') && $input->getOption('wait')) {
+            return true;
+        }
+        if ($this->detectRunningInHook()) {
+            $serviceName = $this->config->get('service.name');
+            $message = "\n<comment>Warning:</comment> $serviceName hook environment detected: assuming <comment>--no-wait</comment> by default."
+                . "\nTo avoid ambiguity, please specify either --no-wait or --wait."
+                . "\n";
+            $this->stdErr->writeln($message);
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Detects a Platform.sh non-terminal Dash environment; i.e. a hook.
+     *
+     * @return bool
+     */
+    private function detectRunningInHook(): bool
+    {
+        $envPrefix = $this->config->get('service.env_prefix');
+        if (getenv($envPrefix . 'PROJECT')
+            && basename(getenv('SHELL')) === 'dash'
+            && function_exists('posix_isatty')
+            && !posix_isatty(STDIN)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Warn the user that the remote environment needs redeploying.
+     */
+    public function redeployWarning(): void
+    {
+        $this->stdErr->writeln([
+            '',
+            '<comment>The remote environment(s) must be redeployed for the change to take effect.</comment>',
+            'To redeploy an environment, run: <info>' . $this->config->get('application.executable') . ' redeploy</info>',
+        ]);
     }
 }

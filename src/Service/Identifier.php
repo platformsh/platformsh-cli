@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 /**
  * @file
  * Finds the correct project and environment for a given URL/string.
@@ -6,6 +7,7 @@
 
 namespace Platformsh\Cli\Service;
 
+use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\Exception\RequestException;
 use Symfony\Component\Console\Exception\InvalidArgumentException;
 use Symfony\Component\Console\Output\ConsoleOutput;
@@ -172,7 +174,7 @@ class Identifier
         if ($cluster === false) {
             $this->debug('Making a HEAD request to identify project from URL: ' . $url);
             try {
-                $response = $this->api->getHttpClient()->head($url, [
+                $response = $this->api->getHttpClient()->request('head', $url, [
                     'auth' => false,
                     'timeout' => 5,
                     'connect_timeout' => 5,
@@ -187,8 +189,12 @@ class Identifier
 
                     return false;
                 }
+            } catch (GuzzleException $e) {
+                $this->debug($e->getMessage());
+
+                return false;
             }
-            $cluster = $response->getHeaderAsArray($this->config->get('service.header_prefix') . '-cluster');
+            $cluster = $response->getHeader($this->config->get('service.header_prefix') . '-cluster');
             $canCache = !empty($cluster)
                 || ($response->getStatusCode() >= 200 && $response->getStatusCode() < 300);
             if ($canCache) {

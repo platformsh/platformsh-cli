@@ -1,29 +1,39 @@
 <?php
+declare(strict_types=1);
 
 namespace Platformsh\Cli\Command;
 
 use Platformsh\Cli\Console\Animation;
+use Platformsh\Cli\Service\Config;
+use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
-class BotCommand extends CommandBase
+class BotCommand extends Command
 {
-    protected $hiddenInList = true;
-    protected $local = true;
+    protected static $defaultName = 'bot';
+
+    private $config;
+
+    public function __construct(Config $config)
+    {
+        $this->config = $config;
+        parent::__construct();
+    }
 
     protected function configure()
     {
-        $this->setName('bot')
-            ->setDescription('The ' . $this->config()->get('service.name') . ' Bot')
+        $this->setDescription('The ' . $this->config->get('service.name') . ' Bot')
             ->addOption('party', null, InputOption::VALUE_NONE)
-            ->addOption('parrot', null, InputOption::VALUE_NONE);
+            ->addOption('parrot', null, InputOption::VALUE_NONE)
+            ->setHidden(true);
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
         $dir = CLI_ROOT . '/resources/bot';
-        $signature = $this->config()->get('service.name');
+        $signature = $this->config->get('service.name');
         $party = $input->getOption('party');
         $interval = $party ? 120000 : 500000;
 
@@ -71,11 +81,11 @@ class BotCommand extends CommandBase
         }
     }
 
-    private function addSignature(array $frames, $signature)
+    private function addSignature(array $frames, string $signature): array
     {
         $indent = '    ';
         if (strlen($signature) > 0) {
-            $signatureIndent = str_repeat(' ', strlen($indent) + 5 - floor(strlen($signature) / 2));
+            $signatureIndent = str_repeat(' ', strlen($indent) + 5 - intval(floor(strlen($signature) / 2)));
             $signature = "\n" . $signatureIndent . '<info>' . $signature . '</info>';
         }
 
@@ -84,7 +94,7 @@ class BotCommand extends CommandBase
         }, $frames);
     }
 
-    private function addColor(array $frames)
+    private function addColor(array $frames): array
     {
         $colors = ['red', 'yellow', 'green', 'blue', 'magenta', 'cyan', 'white'];
         $partyFrames = [];

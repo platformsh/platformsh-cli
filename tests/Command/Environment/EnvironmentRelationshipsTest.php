@@ -2,17 +2,18 @@
 
 namespace Platformsh\Cli\Tests\Command\Environment;
 
-use Platformsh\Cli\Command\Environment\EnvironmentRelationshipsCommand;
-use Symfony\Component\Console\Input\ArrayInput;
-use Symfony\Component\Console\Output\BufferedOutput;
+use PHPUnit\Framework\TestCase;
+use Platformsh\Cli\Tests\CommandRunner;
 
 /**
  * @group commands
  */
-class EnvironmentRelationshipsTest extends \PHPUnit_Framework_TestCase
+class EnvironmentRelationshipsTest extends TestCase
 {
+    private $mockRelationships;
+
     public function setUp() {
-        $mockRelationships = base64_encode(json_encode([
+        $this->mockRelationships = base64_encode(json_encode([
             'database' => [
                 0 => [
                     'host' => 'database.internal',
@@ -27,36 +28,27 @@ class EnvironmentRelationshipsTest extends \PHPUnit_Framework_TestCase
                 ]
             ],
         ]));
-        putenv('PLATFORM_RELATIONSHIPS=' . $mockRelationships);
-    }
-
-    public function tearDown() {
-        putenv('PLATFORM_RELATIONSHIPS=');
+        parent::__construct();
     }
 
     private function runCommand(array $args) {
-        $output = new BufferedOutput();
-        (new EnvironmentRelationshipsCommand())
-            ->run(new ArrayInput($args), $output);
+        $result = (new CommandRunner())
+            ->run('relationships', array_merge(['-v'], $args), ['PLATFORM_RELATIONSHIPS' => $this->mockRelationships]);
 
-        return $output->fetch();
+        return $result->getOutput();
     }
 
     public function testGetRelationshipHost() {
         $this->assertEquals(
             'database.internal',
-            rtrim($this->runCommand([
-                '--property' => 'database.0.host',
-            ]), "\n")
+            $this->runCommand(['-P', 'database.0.host'])
         );
     }
 
     public function testGetRelationshipUrl() {
         $this->assertEquals(
             'mysql://main:123@database.internal:3306/main?is_master=1',
-            rtrim($this->runCommand([
-                '--property' => 'database.0.url',
-            ]), "\n")
+            $this->runCommand(['-P', 'database.0.url'])
         );
     }
 }

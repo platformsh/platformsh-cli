@@ -1,36 +1,66 @@
 <?php
+declare(strict_types=1);
+
 namespace Platformsh\Cli\Command\Integration;
 
 use Platformsh\Cli\Command\CommandBase;
+use Platformsh\Cli\Service\ActivityService;
+use Platformsh\Cli\Service\Api;
+use Platformsh\Cli\Service\IntegrationService;
+use Platformsh\Cli\Service\QuestionHelper;
+use Platformsh\Cli\Service\Selector;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
 class IntegrationDeleteCommand extends CommandBase
 {
+    protected static $defaultName = 'integration:delete';
+
+    private $activityService;
+    private $api;
+    private $integrationService;
+    private $questionHelper;
+    private $selector;
+
+    public function __construct(
+        ActivityService $activityService,
+        Api $api,
+        IntegrationService $integration,
+        QuestionHelper $questionHelper,
+        Selector $selector
+    ) {
+        $this->activityService = $activityService;
+        $this->api = $api;
+        $this->integrationService = $integration;
+        $this->questionHelper = $questionHelper;
+        $this->selector = $selector;
+        parent::__construct();
+    }
+
     /**
      * {@inheritdoc}
      */
     protected function configure()
     {
-        $this
-            ->setName('integration:delete')
-            ->addArgument('id', InputArgument::REQUIRED, 'The integration ID')
+        $this->addArgument('id', InputArgument::REQUIRED, 'The integration ID')
             ->setDescription('Delete an integration from a project');
-        $this->addProjectOption()->addWaitOptions();
+
+        $definition = $this->getDefinition();
+        $this->selector->addProjectOption($definition);
+        $this->activityService->configureInput($definition);
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->validateInput($input);
+        $project = $this->selector->getSelection($input)->getProject();
 
         $id = $input->getArgument('id');
-        $project = $this->getSelectedProject();
 
         $integration = $project->getIntegration($id);
         if (!$integration) {
             try {
-                $integration = $this->api()->matchPartialId($id, $project->getIntegrations(), 'Integration');
+                $integration = $this->api->matchPartialId($id, $project->getIntegrations(), 'Integration');
             } catch (\InvalidArgumentException $e) {
                 $this->stdErr->writeln($e->getMessage());
                 return 1;
@@ -38,9 +68,7 @@ class IntegrationDeleteCommand extends CommandBase
         }
 
         $confirmText = sprintf('Delete the integration <info>%s</info> (type: %s)?', $integration->id, $integration->type);
-        /** @var \Platformsh\Cli\Service\QuestionHelper $questionHelper */
-        $questionHelper = $this->getService('question_helper');
-        if (!$questionHelper->confirm($confirmText)) {
+        if (!$this->questionHelper->confirm($confirmText)) {
             return 1;
         }
 
@@ -48,10 +76,8 @@ class IntegrationDeleteCommand extends CommandBase
 
         $this->stdErr->writeln(sprintf('Deleted integration <info>%s</info>', $integration->id));
 
-        if ($this->shouldWait($input)) {
-            /** @var \Platformsh\Cli\Service\ActivityMonitor $activityMonitor */
-            $activityMonitor = $this->getService('activity_monitor');
-            $activityMonitor->waitMultiple($result->getActivities(), $this->getSelectedProject());
+        if ($this->activityService->shouldWait($input)) {
+            $this->activityService->waitMultiple($result->getActivities(), $project);
         }
 
         return 0;
