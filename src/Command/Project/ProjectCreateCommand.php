@@ -243,16 +243,7 @@ EOF
             return (array) $this->config()->get('service.available_plans');
         }
 
-        $plans = [];
-        foreach ($this->api()->getClient()->getPlans() as $plan) {
-            if ($plan->hasProperty('price', false)) {
-                $plans[$plan->name] = sprintf('%s (%s)', $plan->label, $plan->price->__toString());
-            } else {
-                $plans[$plan->name] = $plan->label;
-            }
-        }
-
-        return $plans;
+        return $plans = $this->api()->getClient()->getSetupOptions()->plans;
     }
 
     /**
@@ -311,7 +302,11 @@ EOF
             'optionsCallback' => function () {
                 return $this->getAvailablePlans(true);
             },
-            'default' => in_array('development', $this->getAvailablePlans()) ? 'development' : null,
+            // @todo ensure the default is based on the dynamic list and works during resolveOptions()
+            //'default' => 'development',
+            'defaultCallback' => function() {
+                return in_array('development', $this->getAvailablePlans(true)) ? 'development' : null;
+            },
             'allowOther' => true,
           ]),
           'environments' => new Field('Environments', [
