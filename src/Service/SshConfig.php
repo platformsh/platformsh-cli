@@ -71,14 +71,27 @@ class SshConfig {
             $lines[] = '';
         }
 
+
+        $hostBlock = '';
         if ($domainWildcards) {
-            $lines[] = 'Host ' . implode(' ', $domainWildcards);
+            $hostBlock = 'Host ' . implode(' ', $domainWildcards);
         }
 
         $sessionIdentityFile = $this->sshKey->selectIdentity();
         if ($sessionIdentityFile !== null) {
+            $lines[] = $hostBlock;
             $lines[] = '# This SSH key was detected as corresponding to the session:';
             $lines[] = sprintf('IdentityFile %s', $this->formatFilePath($sessionIdentityFile));
+            $lines[] = '';
+        }
+
+        // Add default files if there is no preferred session identity file.
+        if ($sessionIdentityFile === null && ($defaultFiles = $this->getUserDefaultSshIdentityFiles())) {
+            $lines[] = '# Include SSH "default" identity files:';
+            foreach ($defaultFiles as $identityFile) {
+                $lines[] = $hostBlock;
+                $lines[] = sprintf('IdentityFile %s', $this->formatFilePath($identityFile));
+            }
             $lines[] = '';
         }
 
@@ -89,15 +102,6 @@ class SshConfig {
                 $this->fs->remove([$includerFilename, $sessionSpecificFilename]);
             }
             return false;
-        }
-
-        // Add default files if there is no preferred session identity file.
-        if ($sessionIdentityFile === null && ($defaultFiles = $this->getUserDefaultSshIdentityFiles())) {
-            $lines[] = '# Include SSH "default" identity files:';
-            foreach ($defaultFiles as $identityFile) {
-                $lines[] = sprintf('IdentityFile %s', $this->formatFilePath($identityFile));
-            }
-            $lines[] = '';
         }
 
         $this->writeSshIncludeFile($sessionSpecificFilename, $lines);
