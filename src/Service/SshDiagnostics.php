@@ -147,11 +147,11 @@ class SshDiagnostics
         if (\strpos($user, '-') === false) {
             return false;
         }
-        list($projectId, $rest) = \explode($user, '-', 2);
+        list($projectId, $rest) = \explode('-', $user, 2);
         if (\strpos($rest, '--') === false) {
             return false;
         }
-        list($environmentMachineName,) = \explode($rest, '--', 2);
+        list($environmentMachineName,) = \explode('--', $rest, 2);
         $project = $this->api->getProject($projectId);
         if (!$project) {
             return false;
