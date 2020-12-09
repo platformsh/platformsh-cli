@@ -3,6 +3,7 @@
 namespace Platformsh\Cli\Service;
 
 use Platformsh\Cli\SshCert\Certifier;
+use Platformsh\Client\Model\Environment;
 use Symfony\Component\Console\Output\ConsoleOutputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Process\Process;
@@ -130,6 +131,40 @@ class SshDiagnostics
     }
 
     /**
+     * Hackily finds an environment from an SSH URI.
+     *
+     * @param string $uri
+     *
+     * @return Environment|false
+     */
+    private function getEnvironment($uri)
+    {
+        // Parse the SSH URI to get the hostname.
+        if (\strpos($uri, '@') === false) {
+            return false;
+        }
+        list($user,) = \explode('@', $uri, 2);
+        if (\strpos($user, '-') === false) {
+            return false;
+        }
+        list($projectId, $rest) = \explode($user, '-', 2);
+        if (\strpos($rest, '--') === false) {
+            return false;
+        }
+        list($environmentMachineName,) = \explode($rest, '--', 2);
+        $project = $this->api->getProject($projectId);
+        if (!$project) {
+            return false;
+        }
+        foreach ($this->api->getEnvironments($project) as $environment) {
+            if ($environment->machine_name === $environmentMachineName) {
+                return $environment;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Checks if an SSH URI is for an internal (first-party) SSH server.
      *
      * @param string $uri
@@ -230,6 +265,16 @@ class SshDiagnostics
                     $this->stdErr->writeln('ssh-keyscan ' . \escapeshellarg('ssh.' . \substr($host, 4)) . ' >> $HOME/.ssh/known_hosts');
                 }
             }
+            return;
+        }
+
+        $environment = $this->getEnvironment($uri);
+        if (!$environment) {
+            $this->stdErr->writeln('Failed to load environment from SSH URI: ' . $uri, OutputInterface::VERBOSITY_DEBUG);
+            return;
+        } elseif ($environment->refresh() && $environment->status !== 'active') {
+            $this->stdErr->writeln(\sprintf('The environment %s is not currently active. Please try again later.', $this->api->getEnvironmentLabel($environment, 'comment')));
+            $this->stdErr->writeln(\sprintf('View recent activities with: <comment>%s activities</comment>', $executable));
             return;
         }
 
