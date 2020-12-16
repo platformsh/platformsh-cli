@@ -41,6 +41,9 @@ abstract class CommandBase extends Command implements MultiAwareInterface
     /** @var bool */
     private static $checkedUpdates;
 
+    /** @var bool */
+    private static $printedApiTokenWarning;
+
     /**
      * @see self::getProjectRoot()
      * @see self::setProjectRoot()
@@ -155,6 +158,13 @@ abstract class CommandBase extends Command implements MultiAwareInterface
         }
 
         $this->promptLegacyMigrate();
+
+        if (!self::$printedApiTokenWarning && $this->onContainer() && (getenv($this->config()->get('application.env_prefix') . 'TOKEN') || $this->api()->hasApiToken(false))) {
+            $this->stdErr->writeln('<comment><options=bold>Warning:</>');
+            $this->stdErr->writeln('An API token is set. Anyone with SSH access to this environment can read or copy the token.');
+            $this->stdErr->writeln('Please remove the token, or ensure it only has strictly necessary access.');
+            self::$printedApiTokenWarning = true;
+        }
     }
 
     /**
@@ -175,6 +185,17 @@ abstract class CommandBase extends Command implements MultiAwareInterface
         }
 
         return $this->api;
+    }
+
+    /**
+     * @return bool
+     */
+    private function onContainer() {
+        $envPrefix = $this->config()->get('service.env_prefix');
+        return getenv($envPrefix . 'PROJECT')
+            && getenv($envPrefix . 'BRANCH')
+            && getenv($envPrefix . 'APP_DIR')
+            && getenv($envPrefix . 'TREE_ID');
     }
 
     /**
