@@ -1270,4 +1270,24 @@ class Api
         }
         return \strnatcasecmp($regionA, $regionB);
     }
+
+    /**
+     * Checks if a project supports environment types.
+     *
+     * @todo remove this when environment types are supported everywhere
+     *
+     * @param Project $project
+     *
+     * @return bool
+     */
+    public function supportsEnvironmentTypes(Project $project)
+    {
+        if ($project->operationAvailable('environment-types')) {
+            return true;
+        }
+        foreach ($this->getEnvironments($project) as $env) {
+            return $env->hasProperty('type', false);
+        }
+        return false;
+    }
 }
