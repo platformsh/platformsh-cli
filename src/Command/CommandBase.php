@@ -40,6 +40,9 @@ abstract class CommandBase extends Command implements MultiAwareInterface
     /** @var bool */
     private static $checkedUpdates;
 
+    /** @var bool */
+    private static $printedApiTokenWarning;
+
     /**
      * @see self::getProjectRoot()
      * @see self::setProjectRoot()
@@ -154,6 +157,14 @@ abstract class CommandBase extends Command implements MultiAwareInterface
         }
 
         $this->promptLegacyMigrate();
+
+        if (!self::$printedApiTokenWarning && $this->onContainer() && (getenv($this->config()->get('application.env_prefix') . 'TOKEN') || $this->api()->hasApiToken(false))) {
+            $this->stdErr->writeln('<fg=yellow;options=bold>Warning:</>');
+            $this->stdErr->writeln('<fg=yellow>An API token is set. Anyone with SSH access to this environment can read the token.</>');
+            $this->stdErr->writeln('<fg=yellow>Please ensure the token only has strictly necessary access.</>');
+            $this->stdErr->writeln('');
+            self::$printedApiTokenWarning = true;
+        }
     }
 
     /**
@@ -174,6 +185,18 @@ abstract class CommandBase extends Command implements MultiAwareInterface
         }
 
         return $this->api;
+    }
+
+    /**
+     * Detects if the command is running on an application container.
+     *
+     * @return bool
+     */
+    private function onContainer() {
+        $envPrefix = $this->config()->get('service.env_prefix');
+        return getenv($envPrefix . 'PROJECT') !== false
+            && getenv($envPrefix . 'BRANCH') !== false
+            && getenv($envPrefix . 'TREE_ID') !== false;
     }
 
     /**
