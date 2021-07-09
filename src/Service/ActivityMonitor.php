@@ -2,6 +2,7 @@
 
 namespace Platformsh\Cli\Service;
 
+use GuzzleHttp\Exception\BadResponseException;
 use Platformsh\Client\Model\Activity;
 use Platformsh\Client\Model\ActivityLog\LogItem;
 use Platformsh\Client\Model\Project;
@@ -99,6 +100,27 @@ class ActivityMonitor
             return Helper::formatTime(time() - $startTime);
         });
         $bar->setFormat('[%bar%] %elapsed:6s% (%state%)');
+
+        // Set up cancellation for the activity on Ctrl+C.
+        if (\function_exists('\\pcntl_signal') && $activity->operationAvailable('cancel')) {
+            declare(ticks = 1);
+            $sigintReceived = false;
+            /** @noinspection PhpComposerExtensionStubsInspection */
+            \pcntl_signal(SIGINT, function () use ($activity, $stdErr, $bar, &$sigintReceived) {
+                if ($sigintReceived) {
+                    exit(1);
+                }
+                $sigintReceived = true;
+                $bar->clear();
+                if ($this->cancel($activity, $stdErr)) {
+                    exit(1);
+                }
+                $stdErr->writeln('');
+                $bar->advance();
+            });
+            $stdErr->writeln('Enter Ctrl+C once to cancel the activity (or twice to quit this command).');
+        }
+
         $bar->start();
 
         $logStream = $this->getLogStream($activity, $bar);
@@ -164,6 +186,38 @@ class ActivityMonitor
         }
 
         return false;
+    }
+
+    /**
+     * Attempts to cancel the activity, catching and printing errors.
+     *
+     * @param Activity $activity
+     * @param OutputInterface $stdErr
+     *
+     * @return bool
+     */
+    private function cancel(Activity $activity, OutputInterface $stdErr)
+    {
+        if (!$activity->operationAvailable('cancel')) {
+            $stdErr->writeln('The activity cannot be cancelled.');
+            return false;
+        }
+        $stdErr->writeln('Cancelling the activity...');
+        try {
+            $activity->cancel();
+        } catch (\Exception $e) {
+            if ($e instanceof BadResponseException
+                && $e->getResponse() && $e->getResponse()->getStatusCode() === 400
+                && \strpos($e->getMessage(), 'cannot be cancelled in its current state') !== false) {
+                $activity->refresh();
+                $stdErr->writeln(\sprintf('The activity cannot be cancelled in its current state (<error>%s</error>).', $activity->state));
+                return false;
+            }
+            $stdErr->writeln(\sprintf('Failed to cancel the activity: <error>%s</error>', $e->getMessage()));
+            return false;
+        }
+        $stdErr->writeln('The activity was successfully cancelled.');
+        return true;
     }
 
     /**
@@ -441,11 +495,11 @@ class ActivityMonitor
     private function getLogStream(Activity $activity, ProgressBar $bar) {
         $url = $activity->getLink('log');
 
-        // Try fetching the stream with a 10 second timeout per call, and a .5
-        // second interval between calls, for up to 2 minutes.
-        $readTimeout = 10;
-        $interval = .5;
+        // Try fetching the stream with an up to 10 second timeout per call,
+        // and a .5 second interval between calls, for up to 2 minutes.
+        $readTimeout = .5;
         $stream = \fopen($url, 'r', false, $this->api->getStreamContext($readTimeout));
+        $interval = .5;
         $start = \microtime(true);
         while ($stream === false) {
             if (\microtime(true) - $start > 120) {
@@ -454,6 +508,7 @@ class ActivityMonitor
             $bar->advance();
             \usleep($interval * 1000000);
             $bar->advance();
+            $readTimeout = $readTimeout >= 10 ? $readTimeout : $readTimeout + .5;
             $stream = \fopen($url, 'r', false, $this->api->getStreamContext($readTimeout));
         }
         \stream_set_blocking($stream, 0);
