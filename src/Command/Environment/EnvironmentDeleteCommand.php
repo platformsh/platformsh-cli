@@ -2,7 +2,6 @@
 namespace Platformsh\Cli\Command\Environment;
 
 use Platformsh\Cli\Command\CommandBase;
-use Platformsh\Cli\Exception\RootNotFoundException;
 use Platformsh\Client\Model\Environment;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
@@ -29,7 +28,7 @@ class EnvironmentDeleteCommand extends CommandBase
              ->addWaitOptions();
         $this->addExample('Delete the environments "test" and "example-1"', 'test example-1');
         $this->addExample('Delete all inactive environments', '--inactive');
-        $this->addExample('Delete all environments merged with "master"', '--merged master');
+        $this->addExample('Delete all environments merged with their parent', '--merged');
         $service = $this->config()->get('service.name');
         $this->setHelp(<<<EOF
 When a {$service} environment is deleted, it will become "inactive": it will
@@ -71,14 +70,14 @@ EOF
 
         // Gather merged environments.
         if ($input->getOption('merged')) {
-            if (!$this->hasSelectedEnvironment()) {
-                $this->stdErr->writeln('Cannot find merged environments: no base environment specified.');
-
-                return 1;
+            $this->stdErr->writeln('Finding environments merged with their parent');
+            $merged = [];
+            foreach ($environments as $environment) {
+                $merge_info = $environment->getProperty('merge_info', false) ?: [];
+                if (isset($environment->parent, $merge_info['commits_ahead'], $merge_info['parent_ref']) && $merge_info['commits_ahead'] === 0) {
+                    $merged[$environment->id] = $environment;
+                }
             }
-            $base = $this->getSelectedEnvironment()->id;
-            $this->stdErr->writeln("Finding environments merged with <info>$base</info>.");
-            $merged = $this->getMergedEnvironments($base);
             if (!$merged) {
                 $this->stdErr->writeln('No merged environments found.');
             }
@@ -112,57 +111,6 @@ EOF
         $success = $this->deleteMultiple($toDelete, $input, $this->stdErr);
 
         return $success ? 0 : 1;
-    }
-
-    /**
-     * @param string $base
-     *
-     * @return array
-     */
-    protected function getMergedEnvironments($base)
-    {
-        $projectRoot = $this->getProjectRoot();
-        if (!$projectRoot) {
-            throw new RootNotFoundException();
-        }
-
-        /** @var \Platformsh\Cli\Service\Git $git */
-        $git = $this->getService('git');
-        $git->setDefaultRepositoryDir($projectRoot);
-
-        /** @var \Platformsh\Cli\Local\LocalProject $localProject */
-        $localProject = $this->getService('local.project');
-        $localProject->ensureGitRemote($projectRoot, $this->getSelectedProject()->getGitUrl());
-
-        $remoteName = $this->config()->get('detection.git_remote_name');
-
-        // Find a list of branches merged on the remote.
-        $git->fetch($remoteName);
-        $mergedBranches = $git->getMergedBranches($remoteName . '/' . $base, true);
-        $mergedBranches = array_filter($mergedBranches, function ($mergedBranch) use ($remoteName) {
-            return strpos($mergedBranch, $remoteName) === 0;
-        });
-        $stripLength = strlen($remoteName . '/');
-        $mergedBranches = array_map(function ($mergedBranch) use ($stripLength) {
-            return substr($mergedBranch, $stripLength);
-        }, $mergedBranches);
-
-        if (empty($mergedBranches)) {
-            return [];
-        }
-
-        // Reconcile this with the list of environments from the API.
-        $project = $this->getSelectedProject();
-        $environments = $this->api()->getEnvironments($project, true);
-        $mergedEnvironments = array_intersect_key($environments, array_flip($mergedBranches));
-        unset($mergedEnvironments[$base]);
-        unset($mergedEnvironments[$project->default_branch]);
-        $parent = $environments[$base]['parent'];
-        if ($parent) {
-            unset($mergedEnvironments[$parent]);
-        }
-
-        return $mergedEnvironments;
     }
 
     /**

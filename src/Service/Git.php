@@ -105,32 +105,6 @@ class Git
     }
 
     /**
-     * Get a list of branches merged with a specific ref.
-     *
-     * @param string $ref
-     * @param bool   $remote
-     * @param null   $dir
-     * @param bool   $mustRun
-     *
-     * @return string[]
-     */
-    public function getMergedBranches($ref = 'HEAD', $remote = false, $dir = null, $mustRun = false)
-    {
-        $args = ['branch', '--list', '--no-column', '--no-color', '--merged', $ref];
-        if ($remote) {
-            $args[] = '--remote';
-        }
-        $online = $remote;
-        $mergedBranches = $this->execute($args, $dir, $mustRun, true, [], $online);
-        return array_map(
-            function ($element) {
-                return trim($element, ' *');
-            },
-            explode("\n", $mergedBranches)
-        );
-    }
-
-    /**
      * Execute a Git command.
      *
      * @param string[]          $args

@@ -127,20 +127,6 @@ class GitServiceTest extends \PHPUnit_Framework_TestCase
     }
 
     /**
-     * Test GitHelper::getMergedBranches().
-     */
-    public function testGetMergedBranches()
-    {
-        $this->git->checkOutNew('branch1');
-        $this->git->checkOutNew('branch2');
-        $this->assertEquals([
-            'branch1',
-            'branch2',
-            'main',
-        ], $this->git->getMergedBranches('main'));
-    }
-
-    /**
      * Test GitHelper::getConfig().
      */
     public function testGetConfig()
